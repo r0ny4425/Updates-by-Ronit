@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="920" height="620" viewBox="0 0 920 620" role="img" aria-labelledby="title desc">
+  <title id="title">Cascade block check and binary search</title>
+  <desc id="desc">Bob checks a block parity. If the parity differs, Bob asks for one half parity, keeps the mismatched side, repeats the split until one bit remains, flips that bit, and queues earlier blocks that contained the corrected bit.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#334155"/>
+    </marker>
+    <style>
+      .bg { fill: #ffffff; }
+      .box { fill: #ffffff; stroke: #334155; stroke-width: 1.5; }
+      .warn { fill: #fff7ed; stroke: #c2410c; stroke-width: 1.5; }
+      .ok { fill: #ecfdf5; stroke: #047857; stroke-width: 1.5; }
+      .muted { fill: #f8fafc; stroke: #64748b; stroke-width: 1.5; }
+      .arrow { stroke: #334155; stroke-width: 2; marker-end: url(#arrow); }
+      .dashed { stroke: #c2410c; stroke-width: 2; stroke-dasharray: 5 5; marker-end: url(#arrow); }
+      .title { font: 16px sans-serif; fill: #0f172a; text-anchor: middle; }
+      .small { font: 13px sans-serif; fill: #475569; text-anchor: middle; }
+      .note { font: 13px sans-serif; fill: #475569; }
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="920" height="620" class="bg"/>
+
+  <rect x="330" y="28" width="260" height="70" rx="8" class="box"/>
+  <text x="460" y="56" class="title">block parity check</text>
+  <text x="460" y="79" class="small">Bob asks Alice for parity over a block</text>
+
+  <line x1="460" y1="98" x2="460" y2="135" class="arrow"/>
+  <rect x="330" y="135" width="260" height="70" rx="8" class="warn"/>
+  <text x="460" y="163" class="title">parity differs</text>
+  <text x="460" y="186" class="small">an odd number of errors is inside</text>
+
+  <line x1="460" y1="205" x2="460" y2="242" class="arrow"/>
+  <rect x="310" y="242" width="300" height="70" rx="8" class="box"/>
+  <text x="460" y="270" class="title">ask one half parity</text>
+  <text x="460" y="293" class="small">the code queries the left half first</text>
+
+  <line x1="460" y1="312" x2="460" y2="349" class="arrow"/>
+  <rect x="310" y="349" width="300" height="70" rx="8" class="box"/>
+  <text x="460" y="377" class="title">keep the mismatched side</text>
+  <text x="460" y="400" class="small">left if it mismatches, otherwise right</text>
+
+  <path d="M310 384 C210 384, 210 277, 302 277" fill="none" class="dashed"/>
+  <text x="70" y="328" class="note">repeat the split while</text>
+  <text x="70" y="347" class="note">more than one index remains</text>
+
+  <line x1="460" y1="419" x2="460" y2="456" class="arrow"/>
+  <rect x="330" y="456" width="260" height="70" rx="8" class="ok"/>
+  <text x="460" y="484" class="title">one index remains</text>
+  <text x="460" y="507" class="small">Bob flips that bit</text>
+
+  <rect x="660" y="456" width="210" height="70" rx="8" class="muted"/>
+  <text x="765" y="484" class="title">backtrack checks</text>
+  <text x="765" y="507" class="small">queue earlier blocks</text>
+  <line x1="590" y1="491" x2="660" y2="491" class="arrow"/>
+
+  <text x="40" y="575" class="note">Each parity response reveals one public bit. The example counts these as Cascade leakage.</text>
+</svg>

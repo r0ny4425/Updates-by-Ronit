@@ -1,0 +1,5 @@
+/* Keep all top-level modules visible without expanding every nested page. */
+.sphinxsidebar li.toctree-l1:not(.current) > ul,
+.sphinxsidebar li.toctree-l2:not(.current) > ul {
+    display: none;
+}

@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="360" viewBox="0 0 980 360" role="img" aria-labelledby="title desc">
+  <title id="title">BB84 event timeline</title>
+  <desc id="desc">A timeline of source emissions, detector reports, quantum done, sifting, QBER estimation, Cascade, verification, and privacy amplification.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#334155"/>
+    </marker>
+    <style>
+      .axis { stroke: #334155; stroke-width: 2; marker-end: url(#arrow); }
+      .event { fill: #fff; stroke: #475569; stroke-width: 1.5; }
+      .quantum { fill: #f5f3ff; stroke: #7c3aed; }
+      .classical { fill: #ecfdf5; stroke: #0f766e; }
+      .post { fill: #fff7ed; stroke: #c2410c; }
+      .title { font: 16px sans-serif; fill: #0f172a; }
+      .small { font: 13px sans-serif; fill: #334155; }
+      .tiny { font: 12px sans-serif; fill: #475569; }
+    </style>
+  </defs>
+
+  <line x1="70" y1="180" x2="920" y2="180" class="axis"/>
+  <text x="70" y="145" class="small">time</text>
+
+  <circle cx="120" cy="180" r="8" fill="#7c3aed"/>
+  <rect x="70" y="56" width="125" height="62" rx="8" class="event quantum"/>
+  <text x="90" y="82" class="title">source</text>
+  <text x="87" y="101" class="small">emission slots</text>
+  <line x1="120" y1="118" x2="120" y2="172" stroke="#7c3aed" stroke-width="1.5"/>
+
+  <circle cx="265" cy="180" r="8" fill="#7c3aed"/>
+  <rect x="210" y="226" width="145" height="62" rx="8" class="event quantum"/>
+  <text x="235" y="252" class="title">fiber</text>
+  <text x="228" y="271" class="small">loss, delay, noise</text>
+  <line x1="265" y1="188" x2="265" y2="226" stroke="#7c3aed" stroke-width="1.5"/>
+
+  <circle cx="405" cy="180" r="8" fill="#7c3aed"/>
+  <rect x="342" y="56" width="150" height="62" rx="8" class="event quantum"/>
+  <text x="370" y="82" class="title">detector</text>
+  <text x="362" y="101" class="small">basis and click</text>
+  <line x1="405" y1="118" x2="405" y2="172" stroke="#7c3aed" stroke-width="1.5"/>
+
+  <circle cx="535" cy="180" r="8" fill="#0f766e"/>
+  <rect x="474" y="226" width="150" height="62" rx="8" class="event classical"/>
+  <text x="501" y="252" class="title">quantum.done</text>
+  <text x="493" y="271" class="small">Alice to Bob</text>
+  <line x1="535" y1="188" x2="535" y2="226" stroke="#0f766e" stroke-width="1.5"/>
+
+  <circle cx="665" cy="180" r="8" fill="#0f766e"/>
+  <rect x="608" y="56" width="145" height="62" rx="8" class="event classical"/>
+  <text x="645" y="82" class="title">sifting</text>
+  <text x="627" y="101" class="small">slots and bases</text>
+  <line x1="665" y1="118" x2="665" y2="172" stroke="#0f766e" stroke-width="1.5"/>
+
+  <circle cx="805" cy="180" r="8" fill="#c2410c"/>
+  <rect x="730" y="226" width="170" height="62" rx="8" class="event post"/>
+  <text x="754" y="252" class="title">post-processing</text>
+  <text x="752" y="271" class="small">QBER, Cascade, hash</text>
+  <line x1="805" y1="188" x2="805" y2="226" stroke="#c2410c" stroke-width="1.5"/>
+
+  <text x="92" y="324" class="tiny">Local events and device reports are scheduled on the same timeline as public messages.</text>
+</svg>

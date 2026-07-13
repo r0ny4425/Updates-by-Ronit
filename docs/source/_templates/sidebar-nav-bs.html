@@ -1,0 +1,24 @@
+<nav class="bd-docs-nav bd-links simyuj-sidebar-nav" aria-label="{{ _('Site Navigation') }}">
+  <div class="simyuj-sidebar-brand">
+    <a class="navbar-brand logo" href="{{ pathto(root_doc) }}">
+      <p class="title logo__title">{{ theme_logo.get("text") or docstitle }}</p>
+    </a>
+  </div>
+  <div class="bd-toc-item navbar-nav">
+    <ul class="nav bd-sidenav simyuj-sidebar-home">
+      <li class="toctree-l0{% if pagename == root_doc %} current active{% endif %}">
+        <a class="reference internal{% if pagename == root_doc %} current{% endif %}" href="{{ pathto(root_doc) }}">{{ _("Home") }}</a>
+      </li>
+    </ul>
+    {{- generate_toctree_html(
+      "sidebar",
+      startdepth=0,
+      show_nav_level=theme_show_nav_level | int,
+      maxdepth=theme_navigation_depth | int,
+      collapse=theme_collapse_navigation | tobool,
+      includehidden=theme_sidebar_includehidden | tobool,
+      titles_only=True
+      )
+    -}}
+  </div>
+</nav>

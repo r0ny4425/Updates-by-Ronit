@@ -1,0 +1,12 @@
+cff-version: 1.2.0
+message: "If you use SimYuj in academic work, please cite the software."
+title: "SimYuj: A deterministic event-driven quantum network simulator"
+type: software
+authors:
+  - name: "SimYuj contributors"
+version: "0.1.0"
+license: MIT
+
+# Add these once the lab repository, final name, and release tag are settled.
+# repository-code: "https://github.com/<lab-account>/<repo-name>"
+# date-released: "YYYY-MM-DD"

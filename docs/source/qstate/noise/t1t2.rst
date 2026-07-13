@@ -1,0 +1,13 @@
+T1/T2
+=====
+
+API Reference
+-------------
+
+.. rubric:: Source File
+
+``src/simyuj/qstate/noise/t1t2.py``
+
+.. automodule:: simyuj.qstate.noise.t1t2
+   :members:
+   :show-inheritance:

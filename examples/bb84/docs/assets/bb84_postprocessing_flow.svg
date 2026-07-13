@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="250" viewBox="0 0 980 250" role="img" aria-labelledby="title desc">
+  <title id="title">BB84 post-processing flow</title>
+  <desc id="desc">Sifting, QBER estimation, Cascade, verification, and privacy amplification transform detected bits into a final key.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#334155"/>
+    </marker>
+    <style>
+      .box { fill: #ffffff; stroke: #334155; stroke-width: 1.5; }
+      .key { fill: #ecfdf5; stroke: #047857; stroke-width: 1.5; }
+      .arrow { stroke: #334155; stroke-width: 2; marker-end: url(#arrow); }
+      .title { font: 16px sans-serif; fill: #0f172a; text-anchor: middle; }
+      .small { font: 13px sans-serif; fill: #475569; text-anchor: middle; }
+      .note { font: 13px sans-serif; fill: #475569; text-anchor: middle; }
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="980" height="250" fill="#ffffff"/>
+
+  <rect x="30" y="74" width="155" height="72" rx="8" class="box"/>
+  <text x="107.5" y="103" class="title">sifting</text>
+  <text x="107.5" y="126" class="small">matching bases</text>
+
+  <line x1="185" y1="110" x2="220" y2="110" class="arrow"/>
+  <rect x="220" y="74" width="155" height="72" rx="8" class="box"/>
+  <text x="297.5" y="103" class="title">QBER sample</text>
+  <text x="297.5" y="126" class="small">reveal sample</text>
+
+  <line x1="375" y1="110" x2="410" y2="110" class="arrow"/>
+  <rect x="410" y="74" width="145" height="72" rx="8" class="box"/>
+  <text x="482.5" y="103" class="title">Cascade</text>
+  <text x="482.5" y="126" class="small">parity checks</text>
+
+  <line x1="555" y1="110" x2="590" y2="110" class="arrow"/>
+  <rect x="590" y="74" width="150" height="72" rx="8" class="box"/>
+  <text x="665" y="103" class="title">verification</text>
+  <text x="665" y="126" class="small">hash check</text>
+
+  <line x1="740" y1="110" x2="775" y2="110" class="arrow"/>
+  <rect x="775" y="74" width="160" height="72" rx="8" class="key"/>
+  <text x="855" y="103" class="title">final key</text>
+  <text x="855" y="126" class="small">privacy hash</text>
+
+  <text x="490" y="200" class="note">Revealed sample bits, Cascade parity bits, and verification tag bits are subtracted before privacy hashing.</text>
+</svg>

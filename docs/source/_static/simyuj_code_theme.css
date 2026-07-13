@@ -1,0 +1,108 @@
+/* VS Code Light-style syntax theme. Loaded after the main docs stylesheet. */
+
+.bd-content div.highlight,
+.bd-content .simyuj-copy-pre-wrap {
+  background: #f6f8fa !important;
+  border-color: #c9d1d9 !important;
+  box-shadow: inset 3px 0 0 #007acc;
+}
+
+.bd-content pre,
+.bd-content .highlight pre {
+  color: #000000 !important;
+}
+
+.bd-content .highlight .hll {
+  background: #fff4ce !important;
+}
+
+.bd-content .highlight .gp,
+.bd-content .highlight .go {
+  color: #6a737d !important;
+}
+
+.bd-content .highlight .c,
+.bd-content .highlight .ch,
+.bd-content .highlight .cm,
+.bd-content .highlight .c1,
+.bd-content .highlight .cs {
+  color: #008000 !important;
+  font-style: italic;
+}
+
+.bd-content .highlight .k,
+.bd-content .highlight .kc,
+.bd-content .highlight .kd,
+.bd-content .highlight .kn,
+.bd-content .highlight .kp,
+.bd-content .highlight .kr,
+.bd-content .highlight .kt,
+.bd-content .highlight .ow {
+  color: #0000ff !important;
+}
+
+.bd-content .highlight .n,
+.bd-content .highlight .na,
+.bd-content .highlight .nx,
+.bd-content .highlight .py,
+.bd-content .highlight .vm {
+  color: #001080 !important;
+}
+
+.bd-content .highlight .nb,
+.bd-content .highlight .bp,
+.bd-content .highlight .fm {
+  color: #795e26 !important;
+}
+
+.bd-content .highlight .nc,
+.bd-content .highlight .ne,
+.bd-content .highlight .nn {
+  color: #267f99 !important;
+}
+
+.bd-content .highlight .nd,
+.bd-content .highlight .nf,
+.bd-content .highlight .ni,
+.bd-content .highlight .nl {
+  color: #795e26 !important;
+}
+
+.bd-content .highlight .o,
+.bd-content .highlight .p,
+.bd-content .highlight .w {
+  color: #000000 !important;
+}
+
+.bd-content .highlight .m,
+.bd-content .highlight .mb,
+.bd-content .highlight .mf,
+.bd-content .highlight .mh,
+.bd-content .highlight .mi,
+.bd-content .highlight .mo,
+.bd-content .highlight .il {
+  color: #098658 !important;
+}
+
+.bd-content .highlight .s,
+.bd-content .highlight .sa,
+.bd-content .highlight .sb,
+.bd-content .highlight .sc,
+.bd-content .highlight .dl,
+.bd-content .highlight .sd,
+.bd-content .highlight .s2,
+.bd-content .highlight .se,
+.bd-content .highlight .sh,
+.bd-content .highlight .si,
+.bd-content .highlight .sx,
+.bd-content .highlight .sr,
+.bd-content .highlight .s1,
+.bd-content .highlight .ss {
+  color: #a31515 !important;
+}
+
+.bd-content .highlight .err,
+.bd-content .highlight .gr,
+.bd-content .highlight .gt {
+  color: #b42318 !important;
+}

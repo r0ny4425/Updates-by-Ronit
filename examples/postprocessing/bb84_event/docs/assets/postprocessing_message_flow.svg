@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="740" viewBox="0 0 980 740" role="img" aria-labelledby="title desc">
+  <title id="title">BB84 post-processing message flow</title>
+  <desc id="desc">Alice and Bob exchange sifting, QBER estimation, Cascade, verification, and privacy-amplification messages over public classical channels. Local scheduled events are shown as small side boxes.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#334155"/>
+    </marker>
+    <style>
+      .bg { fill: #ffffff; }
+      .lane { stroke: #94a3b8; stroke-width: 2; }
+      .agent { fill: #eef6ff; stroke: #2563eb; stroke-width: 1.5; }
+      .local-box { fill: #fff7ed; stroke: #c2410c; stroke-width: 1.4; }
+      .arrow { stroke: #334155; stroke-width: 2; marker-end: url(#arrow); }
+      .title { font: 17px sans-serif; fill: #0f172a; text-anchor: middle; }
+      .msg { font: 14px sans-serif; fill: #0f172a; text-anchor: middle; }
+      .note { font: 12px sans-serif; fill: #475569; text-anchor: middle; }
+      .local-text { font: 12px sans-serif; fill: #7c2d12; text-anchor: middle; }
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="980" height="740" class="bg"/>
+
+  <rect x="70" y="34" width="210" height="52" rx="8" class="agent"/>
+  <text x="175" y="66" class="title">AlicePostProcessor</text>
+  <rect x="700" y="34" width="210" height="52" rx="8" class="agent"/>
+  <text x="805" y="66" class="title">BobPostProcessor</text>
+
+  <line x1="175" y1="92" x2="175" y2="720" class="lane"/>
+  <line x1="805" y1="92" x2="805" y2="720" class="lane"/>
+
+  <line x1="186" y1="120" x2="794" y2="120" class="arrow"/>
+  <text x="490" y="111" class="msg">sift.bases</text>
+  <text x="490" y="136" class="note">Alice sends her basis list</text>
+
+  <line x1="794" y1="170" x2="186" y2="170" class="arrow"/>
+  <text x="490" y="161" class="msg">sift.indices</text>
+  <text x="490" y="186" class="note">Bob keeps matching bases with measured bits</text>
+
+  <rect x="60" y="207" width="230" height="42" rx="8" class="local-box"/>
+  <text x="175" y="225" class="local-text">local event</text>
+  <text x="175" y="240" class="local-text">estimate.choose_sample</text>
+
+  <line x1="186" y1="280" x2="794" y2="280" class="arrow"/>
+  <text x="490" y="271" class="msg">estimate.sample</text>
+  <text x="490" y="296" class="note">sample positions and Alice sample bits</text>
+
+  <line x1="794" y1="330" x2="186" y2="330" class="arrow"/>
+  <text x="490" y="321" class="msg">estimate.result</text>
+  <text x="490" y="346" class="note">QBER, accept flag, sample errors</text>
+
+  <line x1="186" y1="380" x2="794" y2="380" class="arrow"/>
+  <text x="490" y="371" class="msg">cascade.start</text>
+  <text x="490" y="396" class="note">passes and first block size</text>
+
+  <rect x="690" y="407" width="230" height="42" rx="8" class="local-box"/>
+  <text x="805" y="425" class="local-text">local event</text>
+  <text x="805" y="440" class="local-text">cascade.next_request</text>
+
+  <line x1="794" y1="475" x2="186" y2="475" class="arrow"/>
+  <text x="490" y="466" class="msg">cascade.parity_request</text>
+  <line x1="186" y1="505" x2="794" y2="505" class="arrow"/>
+  <text x="490" y="496" class="msg">cascade.parity_response</text>
+  <text x="490" y="522" class="note">the request/response pair repeats until Cascade finishes</text>
+
+  <line x1="794" y1="550" x2="186" y2="550" class="arrow"/>
+  <text x="490" y="541" class="msg">verify.tag</text>
+  <text x="490" y="566" class="note">Bob sends a Toeplitz tag for the reconciled bits</text>
+
+  <line x1="186" y1="595" x2="794" y2="595" class="arrow"/>
+  <text x="490" y="586" class="msg">verify.result</text>
+
+  <rect x="690" y="612" width="230" height="42" rx="8" class="local-box"/>
+  <text x="805" y="630" class="local-text">local event</text>
+  <text x="805" y="645" class="local-text">privacy.prepare</text>
+
+  <line x1="794" y1="675" x2="186" y2="675" class="arrow"/>
+  <text x="490" y="666" class="msg">privacy.seed</text>
+  <text x="490" y="691" class="note">Bob sends the Toeplitz seed and final key length</text>
+
+  <line x1="186" y1="720" x2="794" y2="720" class="arrow"/>
+  <text x="490" y="711" class="msg">finished</text>
+</svg>

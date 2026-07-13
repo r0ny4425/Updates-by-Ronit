@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="360" viewBox="0 0 960 360" role="img" aria-labelledby="title desc">
+  <title id="title">Single-photon BB84 network</title>
+  <desc id="desc">Alice has a source and agent. Bob has a detector and agent. A quantum channel goes from Alice to Bob, and two classical public channels connect the agents.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#333"/>
+    </marker>
+    <style>
+      .node { fill: #f8fafc; stroke: #334155; stroke-width: 2; }
+      .device { fill: #ffffff; stroke: #64748b; stroke-width: 1.5; }
+      .agent { fill: #eef6ff; stroke: #2563eb; stroke-width: 1.5; }
+      .quantum { stroke: #7c3aed; stroke-width: 4; fill: none; marker-end: url(#arrow); }
+      .classical { stroke: #0f766e; stroke-width: 3; fill: none; marker-end: url(#arrow); }
+      .label { font: 16px sans-serif; fill: #0f172a; }
+      .small { font: 13px sans-serif; fill: #334155; }
+      .caption { font: 14px sans-serif; fill: #475569; }
+    </style>
+  </defs>
+
+  <rect x="40" y="50" width="290" height="250" rx="10" class="node"/>
+  <text x="70" y="85" class="label">Alice node</text>
+  <rect x="70" y="115" width="220" height="58" rx="8" class="device"/>
+  <text x="95" y="150" class="label">SinglePhotonSource</text>
+  <rect x="70" y="212" width="220" height="58" rx="8" class="agent"/>
+  <text x="108" y="247" class="label">BB84AliceAgent</text>
+
+  <rect x="630" y="50" width="290" height="250" rx="10" class="node"/>
+  <text x="660" y="85" class="label">Bob node</text>
+  <rect x="670" y="115" width="210" height="58" rx="8" class="device"/>
+  <text x="725" y="150" class="label">DetectorArray</text>
+  <rect x="670" y="212" width="210" height="58" rx="8" class="agent"/>
+  <text x="718" y="247" class="label">BB84BobAgent</text>
+
+  <path d="M290 144 C410 110, 550 110, 670 144" class="quantum"/>
+  <text x="407" y="105" class="small">lossy quantum fiber</text>
+
+  <path d="M290 226 C430 188, 530 188, 670 226" class="classical"/>
+  <text x="390" y="197" class="small">public classical channel</text>
+
+  <path d="M670 258 C530 320, 430 320, 290 258" class="classical"/>
+  <text x="380" y="326" class="small">public classical channel</text>
+
+  <line x1="180" y1="173" x2="180" y2="212" stroke="#64748b" stroke-width="2" stroke-dasharray="5 5"/>
+  <text x="86" y="195" class="caption">source reports</text>
+
+  <line x1="775" y1="173" x2="775" y2="212" stroke="#64748b" stroke-width="2" stroke-dasharray="5 5"/>
+  <text x="790" y="195" class="caption">detector reports</text>
+</svg>

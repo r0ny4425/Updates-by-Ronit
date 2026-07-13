@@ -1,0 +1,77 @@
+"""Public component package exports.
+
+This package collects the simulator's event-driven component surfaces:
+channels, connections, ports, memories, and sources. Concrete components remain
+timeline event targets; ports and connection records provide the routing
+structure used to schedule cross-component delivery events.
+"""
+
+from __future__ import annotations
+
+from .channels import (
+    ACTION_RECEIVE_CLASSICAL,
+    ACTION_TRANSMIT_CLASSICAL,
+    ACTION_TRANSMIT_QUANTUM,
+    DEFAULT_FIBER_LIGHT_SPEED_M_PER_S,
+    ClassicalChannel,
+    QuantumChannel,
+)
+from .connections import (
+    PortConnection,
+    PortDelivery,
+    connect_ports,
+    default_connection_id,
+    require_connection,
+)
+from .memories import (
+    MEMORY_ABSORB,
+    MEMORY_APPLY_OPERATOR,
+    MEMORY_DISCARD,
+    MEMORY_EMIT,
+    MEMORY_EXPIRE,
+    MEMORY_MEASURE,
+    QuantumMemory,
+)
+from .ports import Port, PortDirection, PortKind
+from .sources.reports import SourcePreparationReport
+from .sources.single_photon_source import (
+    ACTION_EMIT,
+    ACTION_START,
+    DeltaTiming,
+    EmissionTimingProfile,
+    ExGaussianTiming,
+    GaussianTiming,
+    SinglePhotonSource,
+)
+
+__all__ = [
+    "ACTION_EMIT",
+    "ACTION_RECEIVE_CLASSICAL",
+    "ACTION_START",
+    "ACTION_TRANSMIT_CLASSICAL",
+    "ACTION_TRANSMIT_QUANTUM",
+    "ClassicalChannel",
+    "DEFAULT_FIBER_LIGHT_SPEED_M_PER_S",
+    "DeltaTiming",
+    "EmissionTimingProfile",
+    "ExGaussianTiming",
+    "GaussianTiming",
+    "MEMORY_ABSORB",
+    "MEMORY_APPLY_OPERATOR",
+    "MEMORY_DISCARD",
+    "MEMORY_EMIT",
+    "MEMORY_EXPIRE",
+    "MEMORY_MEASURE",
+    "Port",
+    "PortConnection",
+    "PortDelivery",
+    "PortDirection",
+    "PortKind",
+    "QuantumMemory",
+    "QuantumChannel",
+    "SinglePhotonSource",
+    "SourcePreparationReport",
+    "connect_ports",
+    "default_connection_id",
+    "require_connection",
+]

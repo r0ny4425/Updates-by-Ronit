@@ -20,3 +20,4 @@ graphify-out/
 scratch/*
 !scratch/.gitkeep
 *.tmp.md
+uv.lock

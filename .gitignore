@@ -12,3 +12,11 @@ build/
 .hypothesis/
 docs/_build/
 docs/build/
+
+# knowledge graph output (regenerated locally, not committed)
+graphify-out/
+
+# working notes — directory is tracked via .gitkeep, contents never are
+scratch/*
+!scratch/.gitkeep
+*.tmp.md

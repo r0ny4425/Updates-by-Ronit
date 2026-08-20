@@ -720,13 +720,35 @@ for each call.
 > `primitives.messages`, which is the one part of that package that does depend on
 > `simyuj.signal`.
 >
-> **Open for step 1:** whether `phase_shifted` and `attenuated` are free functions
-> in `components/coherent_optics.py` or stay methods on `CoherentState`. Methods read
-> better
-> (`state.attenuated(0.1)`); free functions keep all arithmetic in one module.
-> Commit 1 does not need either, so the decision is deferred to where the
-> arithmetic actually lands. The `attenuated`-not-`with_attenuation` naming
-> rationale survives both ways: the parameter name carries the convention.
+> **Settled at step 1: free functions, and the module is not built yet.**
+> Two decisions, both made while building the source.
+>
+> *Free functions, not methods.* The decisive argument is coverage, not taste:
+> of the eight operations listed above, only `phase_shifted` and `attenuated`
+> could be methods at all. `interfere` and `split_50_50` are binary or return
+> pairs, and `gaussian_temporal_overlap`, `click_probability`,
+> `polarization_weights` and `rotated_polarization` take no `CoherentState`.
+> Methods would cover two of eight and split the arithmetic across two layers,
+> so a reader would have to remember which half lives where. `primitives/` is
+> also below `qstate/`, `components/` and `signal/`; beamsplitter physics there
+> would be the first time that layer carried device physics, and the
+> `SubsystemHandle` precedent this type was placed against is a pure inert value
+> type. `coherent_state.py`'s own module docstring already states the split, so
+> methods would additionally contradict shipped code. The
+> `attenuated`-not-`with_attenuation` naming rationale survives: the parameter
+> name (`power_transmission`) carries the convention.
+>
+> *The module does not exist after step 1.* `WeakCoherentPulseSource` builds
+> `alpha = sqrt(mu) * exp(i*(Theta + phi_enc))` with a single
+> `CoherentState.from_mean_photon_number(mu, phase_rad=...)` call. It needs
+> neither `phase_shifted` nor `attenuated` — there is no attenuation at a source,
+> and the phase is built in rather than applied to an existing amplitude. Shipping
+> `coherent_optics.py` at step 1 would ship two one-line functions with **no
+> caller in `src/`**, since the channel's `alpha -> sqrt(eta)*alpha` is S5 and
+> unlanded. The module is built by the step that has its first caller. The
+> earlier ordering here assumed the source would need `with_phase_shift`, which
+> was true only while the amplitude was built once at construction; building it
+> per pulse from mu and phase removes the dependency.
 
 `components/coherent_optics.py` is imported by the source, the channel, the
 interferometer, and the optical detector. No `Signal`, no `Timeline`, no RNG, no
@@ -1118,6 +1140,11 @@ a commit that adds an RNG stream name is not a `chore`.
 
 ### Step 1 — `components/coherent_optics.py`. Depends on: nothing
 
+**Deferred past the source.** Nothing depends on it until the channel's
+amplitude branch, so it is built with its first caller rather than ahead of one;
+see step 2 and the placement note in section 4. This section stays as the
+specification for when it lands.
+
 Pure functions, no `Signal` import. Testable and tested alone.
 
 Tests that earn their place: the `interfere` energy invariant
@@ -1131,10 +1158,47 @@ exactly.
 Not worth a test: `mean_photon_number` and `phase_rad`, which are `abs()**2` and
 `cmath.phase`.
 
-### Step 2 — `WeakCoherentPulseSource`. Depends on: S1, S2, S9, optics.py
+### Step 2 — `WeakCoherentPulseSource`. Depends on: S1, S2, S9
+
+**Not on `coherent_optics.py`** — corrected while building it. The source needs
+one `CoherentState.from_mean_photon_number` call and no optical arithmetic at
+all; see the placement note in section 4. Steps 1 and 2 are therefore
+independent, and the source was built first.
 
 Reuses the entire `sources/_common.py` scheduler. Exports itself from
 `sources/__init__.py` and `components/__init__.py`.
+
+Two departures from the plan as written, both settled during the build:
+
+- **Three selector protocols, two selection records.** `IntensitySelector` and
+  `EncodingPhaseSelector` return `(value, index)` records;
+  `CarrierPhaseSelector` returns a bare `float`, because
+  `PerPulseRandomCarrierPhase` draws from a continuous distribution and has no
+  alphabet to index. That partition is not a style choice — it is the one
+  `CoherentPulsePreparationReport` already encodes, which carries
+  `intensity_index` and `encoding_phase_index` and deliberately no
+  `carrier_phase_index`. A single generic float selector would also type-check
+  `intensity=RandomPhaseChoice(...)` and silently produce mu in {0, pi}.
+- **`encoding_phase` defaults to `FixedPhase(0.0)`, not `RandomPhaseChoice`.**
+  The reference modulator defaulted to the DPS alphabet, which was right for a
+  component named `PhaseModulator` in a DPS design. This source serves DPS, COW
+  and decoy BB84, so an unconfigured one is an ordinary unmodulated laser. It
+  also keeps "the default configuration consumes zero randomness" true of the
+  default rather than of a specially chosen configuration, and it forces the
+  alphabet to be stated at the call site — which is where the ordering trap in
+  5.4 has to be visible.
+
+The selectors live in `sources/coherent_preparation.py` rather than in the
+component file: at repository docstring density the two together would be about
+700 lines, and the split mirrors `detectors/primitives/gate.py` against
+`detector_array.py`. The selector module imports no `Signal`, no `Timeline` and
+no `Component`, so it is testable against a two-line fake RNG.
+
+One regression in the reference was **not** carried over: its `bind()` dropped
+the `_bound_timeline_id` guard that `SinglePhotonSource` and
+`EntangledPairSource` both keep, so rebinding a source to a second timeline
+would have silently succeeded. Since `bind_source_rngs` is not used here (5.3),
+that guard is written by hand.
 
 Counter check: `prepared_pulses == active_slots` exactly (no emission Bernoulli),
 every report has `state_ref is None`, and `abs(alpha)**2 == mu` for every pulse.
@@ -1311,7 +1375,7 @@ Section 8. Not now.
 | Step | Needs from the shared commit |
 |---|---|
 | 1 optics.py | nothing |
-| 2 source | S1 `coherent_state`, S2 validation, S9 sibling report |
+| 2 source | S1 `coherent_state`, S2 validation, S9 sibling report — **not** optics.py |
 | 3 channel path | S1, S3 `_with_metadata`, S5 branch |
 | 4 interferometer | S1 `temporal_mode_sigma_s`, S3 |
 | 5 optical detector | S6, S7, S8 |

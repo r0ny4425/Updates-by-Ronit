@@ -89,19 +89,35 @@ Each lab is a focused notebook. Read one lab, not the whole tutorial set.
 | Spec says | Module | Notes |
 |---|---|---|
 | single-photon source, heralded single photon | `simyuj.components.sources.SinglePhotonSource` | `frequency_hz`, `emission_probability`, `wavelength_nm`, `duration_s`, `encoding_scheme`, `sampler`, `timing_profile`. Zero-or-one photon backed by a one-qubit qstate |
+| weak coherent pulse, attenuated laser, WCP transmitter | `simyuj.components.sources.WeakCoherentPulseSource` | `device_id`, `frequency_hz`, `intensity`, `encoding_scheme`, `wavelength_nm`, `start_time_s`, `duration_s`, `timing_profile`, `carrier_phase`, `encoding_phase`, `temporal_mode_sigma_s`. Emits `SignalKind.PULSE` carrying a `CoherentState`; **no qstate record is created** |
 | entangled pair source, SPDC, EPR source | `simyuj.components.sources.EntangledPairSource` | Two quantum output ports |
-| which states are emitted, state distribution | `simyuj.qstate.StateSampler` | `states`, `probabilities`, `rep="ket"`, `labels` |
+| which states are emitted, state distribution | `simyuj.qstate.StateSampler` | `states`, `probabilities`, `rep="ket"`, `labels`. Qstate payloads only — it cannot express a `(mu, phase)` choice |
+| per-pulse intensity / phase choice (coherent source) | `simyuj.components.sources.coherent_preparation` | `FixedIntensity`; `FixedCarrierPhase`, `PerPulseRandomCarrierPhase`; `FixedPhase`, `RandomPhaseChoice`, `PhaseSequence`; `DPS_PHASES` |
+| optical amplitude value type | `simyuj.primitives.coherent_state.CoherentState` | One stored field `alpha`; `mean_photon_number` and `phase_rad` derived. Not re-exported from `simyuj.signal` |
 | emission jitter, timing profile | `simyuj.components.GaussianTiming` | `mean_emission_delay_ticks`, `emission_delay_stddev_ticks`, `max_emission_delay_ticks` |
 | encoding basis (polarization, time-bin) | `simyuj.signal.EncodingScheme` | |
-| source reports | `SourcePreparationReport` | Delivered to agent via `AGENT_REPORT` port |
+| source reports | `SourcePreparationReport`, `CoherentPulsePreparationReport` | Delivered to agent via `AGENT_REPORT` port. The coherent one carries μ, Θ, φ_enc and their alphabet indices, and has no `state_ref` or `sampler_*` |
 
-**Not modeled natively:** weak coherent pulses / attenuated lasers, optical field
-amplitudes, decoy states, multi-photon/photon-number statistics beyond
-`emission_probability`, heralded sources. There is no coherent-pulse source and no
-amplitude type in `src/`; `Signal` carries qstate references only. Decoy states and
-photon-number statistics are protocol-level additions — implement in the agent, not
-the component, unless a real new device is required. A WCP source *is* a real new
-device; see `docs/dev/dps-design.md`.
+`WeakCoherentPulseSource` is Alice's **complete** preparation device: it chooses
+μ, Θ and φ_enc per pulse and builds `alpha = sqrt(mu) * exp(i*(Theta + phi_enc))`
+itself. There is no separate modulator component and none is planned.
+
+**Nothing samples a photon number.** Choosing which μ to prepare is a classical
+preparation choice; drawing `n ~ Poisson(mu)` is not, and no code path does it.
+Photon statistics enter in closed form at detection.
+
+**Not modeled natively:** decoy states, heralded sources, modulator insertion
+loss, finite extinction ratio, laser relative intensity noise, side modes, chirp,
+and finite laser linewidth (`FixedCarrierPhase` means infinite coherence length).
+Decoy intensity levels are one new selector class in
+`sources/coherent_preparation.py` and no other change; the surrounding
+photon-number analysis is protocol-level and belongs in the agent.
+
+**The coherent pulse has no transport yet.** `QuantumChannel` still calls
+`qstate_targets_from_signal` unconditionally and rejects a signal with no
+`state_ref`, so a `WeakCoherentPulseSource` can currently only be wired
+port-to-port to a terminating component. See section 5 and
+`docs/dev/dps-design.md`.
 
 ### 3.2 Channels
 
@@ -135,6 +151,12 @@ noise_models, and say so explicitly in the report.
 A phase-encoded protocol (DPS, DQPS, COW) therefore has no receiver in this
 repo today. Report it as a gap. The design for building one is
 `docs/dev/dps-design.md`; do not infer an API from this section.
+
+**No phase modulator is planned, and its absence is not the gap.**
+`WeakCoherentPulseSource` (§3.1) chooses the encoding phase itself, so a
+separate modulator would add an event hop and a report describing a phase the
+source already knows. The missing receiver is the interferometer and an optical
+detector, not a modulator.
 
 ### 3.4 Detectors
 
@@ -313,12 +335,17 @@ Save a JSONL event log when ordering is unclear.
 Not natively modeled. If the spec requires one, report it as a gap and propose either an
 approximation or a new component:
 
-- **Weak coherent pulses and optical field amplitudes.** There is no coherent
-  source, no amplitude on `Signal`, no optical arithmetic module, no phase
-  modulator, and no interferometer. Everything downstream of that — DPS, DQPS,
-  COW, decoy-state BB84, phase encoding of any kind, beamsplitters, and
-  interference visibility — is unbuilt, not merely unparameterized. Report the
-  whole family as a gap. The design for building it is `docs/dev/dps-design.md`
+- **Coherent-pulse transport, interference, and detection.** The *transmitter*
+  now exists — `WeakCoherentPulseSource` (§3.1), `CoherentState`, and the
+  `coherent_state` / `temporal_mode_sigma_s` / `polarization` fields on
+  `Signal`. Nothing downstream of it does. There is no optical arithmetic
+  module (`components/coherent_optics.py` is named in docstrings and does not
+  exist), no amplitude path through `QuantumChannel`, no beamsplitter, no
+  interferometer, and no detector that accepts an amplitude-only signal. So
+  DPS, DQPS, COW, decoy-state BB84 and interference visibility remain unbuilt
+  end to end. Report the receiver half as a gap, and note that a coherent
+  source can currently only be wired directly to a terminating component. The
+  design for the rest is `docs/dev/dps-design.md`
 - Decoy-state BB84 (photon-number statistics)
 - Free-space / satellite channels, atmospheric turbulence
 - Continuous-variable QKD (repo is discrete-variable)

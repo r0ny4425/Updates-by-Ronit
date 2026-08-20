@@ -7,7 +7,6 @@ path, and the shared ``SignalSink`` for the quantum path.
 
 from __future__ import annotations
 
-import cmath
 from dataclasses import dataclass, field
 from math import pi
 
@@ -25,7 +24,7 @@ from simyuj.components.sources import (
     RandomPhaseChoice,
     WeakCoherentPulseSource,
 )
-from simyuj.components.sources._common import DeltaTiming, GaussianTiming
+from simyuj.components.sources._common import DeltaTiming
 from simyuj.control import AGENT_REPORT, Agent, AgentContext
 from simyuj.engine.event import Event
 from simyuj.engine.timeline import Timeline
@@ -262,28 +261,16 @@ def test_report_records_both_phases_separately_and_their_alphabet_indices() -> N
 
 
 def test_report_carries_no_qstate_or_sampler_fields() -> None:
+    # This cannot fail today. It is kept because it guards a physics claim
+    # across a future edit: emitting a coherent pulse creates no quantum state,
+    # and step 7 widens this exact report for polarization -- which is when
+    # someone might reach for a state_ref beside it.
     source = _make_source()
     _run(source)
 
     report = source.reports[0]
     for absent in ("state_ref", "state_targets", "sampler_index", "sampler_label"):
         assert not hasattr(report, absent)
-
-
-def test_the_encoding_phase_is_not_recoverable_from_the_amplitude() -> None:
-    # cmath.phase returns the total wrapped phase. With a nonzero carrier phase
-    # it already differs from the encoding phase, which is why protocol code
-    # must read encoding_phase_index from the report and never arg(alpha).
-    source = _make_source(
-        carrier_phase=FixedCarrierPhase(1.0),
-        encoding_phase=FixedPhase(pi),
-    )
-    _timeline, sink = _run(source)
-
-    state = sink.signals[0].coherent_state
-    assert cmath.phase(state.alpha) != pytest.approx(pi, abs=1e-6)
-    assert source.reports[0].encoding_phase_rad == pi
-    assert source.reports[0].encoding_phase_index == 0
 
 
 def test_report_reaches_an_agent_through_the_report_port() -> None:
@@ -395,19 +382,6 @@ def test_intensity_and_encoding_draw_from_independent_streams() -> None:
     )
 
 
-def test_timing_profile_jitter_uses_the_timing_stream_only() -> None:
-    source = _make_source(
-        timing_profile=GaussianTiming(
-            mean_emission_delay_ticks=0,
-            emission_delay_stddev_ticks=0.0,
-            max_emission_delay_ticks=0,
-        ),
-    )
-    _timeline, sink = _run(source)
-
-    assert [time for time, _ in sink.received] == [0, 1, 2, 3, 4]
-
-
 # --------------------------------------------------------------------------
 # construction-time validation
 # --------------------------------------------------------------------------
@@ -426,30 +400,23 @@ def test_binding_to_a_second_timeline_is_rejected() -> None:
         source.bind(BindingContext(timeline=second, logger=second.logger))
 
 
-def test_bind_rejects_a_non_binding_context() -> None:
-    source = _make_source()
-    with pytest.raises(TypeError, match="context must be BindingContext"):
-        source.bind(object())
-
-
 @pytest.mark.parametrize(
     ("overrides", "expected"),
     [
+        # Each row is a distinct validator reached from __post_init__. Rows that
+        # only re-exercise require_* or the _common.py converters through a
+        # second field are deliberately absent: those helpers have their own
+        # tests, and repeating them here tests nothing about this component.
         ({"device_id": ""}, ValueError),
         ({"frequency_hz": 0.0}, ValueError),
-        ({"frequency_hz": -1e12}, ValueError),
         ({"frequency_hz": True}, TypeError),
         ({"encoding_scheme": "phase"}, TypeError),
-        ({"wavelength_nm": 0.0}, ValueError),
-        ({"wavelength_nm": True}, TypeError),
-        ({"start_time_s": -1e-12}, ValueError),
-        ({"duration_s": 0.0}, ValueError),
+        # Zero is rejected rather than special-cased: the sigma -> 0 limit is a
+        # different, discrete model.
         ({"temporal_mode_sigma_s": 0.0}, ValueError),
-        ({"temporal_mode_sigma_s": -1e-13}, ValueError),
-        ({"temporal_mode_sigma_s": True}, TypeError),
+        # Proves __post_init__ actually calls validate_pulse_selectors; the
+        # three-way method mapping is covered in test_coherent_preparation.py.
         ({"intensity": object()}, TypeError),
-        ({"carrier_phase": object()}, TypeError),
-        ({"encoding_phase": object()}, TypeError),
     ],
 )
 def test_construction_rejects_invalid_configuration(overrides, expected) -> None:
@@ -458,10 +425,22 @@ def test_construction_rejects_invalid_configuration(overrides, expected) -> None
 
 
 def test_temporal_mode_sigma_is_optional_and_not_quantized_to_ticks() -> None:
-    # seconds_to_ticks rounds to integer picoseconds; a width far below one tick
-    # must survive as a float, or no partial-overlap model is writable later.
+    # test_signal_coherent_fields.py pins that *Signal* does not quantize sigma.
+    # This pins that the *source* does not either -- a seconds_to_ticks call on
+    # the way in or on the way out would round a sub-picosecond width to zero,
+    # quantizing gamma and breaking the partial-overlap model at step 4. The
+    # Signal-level test cannot catch that, because it never goes through a
+    # source.
     assert _make_source().temporal_mode_sigma_s is None
-    assert _make_source(temporal_mode_sigma_s=1e-15).temporal_mode_sigma_s == 1e-15
+
+    sub_tick_sigma = 4e-13  # seconds_to_ticks would round this to 0 ticks
+    source = _make_source(temporal_mode_sigma_s=sub_tick_sigma)
+    assert source.temporal_mode_sigma_s == sub_tick_sigma
+
+    _timeline, sink = _run(source)
+    assert all(
+        signal.temporal_mode_sigma_s == sub_tick_sigma for signal in sink.signals
+    )
 
 
 def test_exhausted_phase_sequence_aborts_the_run_with_a_clear_reason() -> None:

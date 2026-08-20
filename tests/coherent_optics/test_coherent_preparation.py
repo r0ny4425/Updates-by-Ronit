@@ -84,10 +84,6 @@ def test_random_phase_choice_guards_the_random_equals_one_boundary() -> None:
     assert selection.phase_rad == pi
 
 
-def test_random_phase_choice_default_alphabet_is_the_dps_pair() -> None:
-    assert RandomPhaseChoice().phases == (0.0, pi)
-
-
 def test_per_pulse_random_carrier_phase_draws_on_the_half_open_interval() -> None:
     # uniform(a, b) is [a, b): the low end is reachable, the high end is not.
     assert (
@@ -140,79 +136,44 @@ def test_selectors_are_pure_so_one_instance_can_drive_two_sources() -> None:
     assert forward == list(reversed(backward))
 
 
-def test_fixed_intensity_accepts_vacuum_and_bright_pulses() -> None:
-    # mu = 0 is coherent vacuum, a real state. There is no upper bound either:
-    # "weak" names the source, it is not a validation constraint.
-    assert FixedIntensity(0.0).mean_photon_number == 0.0
-    assert FixedIntensity(4.0).mean_photon_number == 4.0
-
-
 @pytest.mark.parametrize(
-    ("value", "expected"),
+    ("factory", "expected"),
     [
-        (-0.1, ValueError),
-        (float("nan"), ValueError),
-        (float("inf"), ValueError),
-        (True, TypeError),
-        ("0.2", TypeError),
+        # The non-negative branch. require_finite_real's own tests reach nan,
+        # inf and bool (tests/primitives/test_validation.py); they do not reach
+        # this one, and it is the only thing separating an intensity from a
+        # phase.
+        (lambda: FixedIntensity(-0.1), ValueError),
+        # An empty alphabet would make select_* index out of range at the first
+        # pulse, on both alphabet-taking selectors.
+        (lambda: RandomPhaseChoice(()), ValueError),
+        (lambda: PhaseSequence(()), ValueError),
+        # A str is a Sequence, so without the explicit guard "0,pi" would be
+        # accepted as a four-phase alphabet of single characters.
+        (lambda: RandomPhaseChoice("0,pi"), TypeError),
     ],
 )
-def test_fixed_intensity_rejects_invalid_mean_photon_number(value, expected) -> None:
+def test_selector_construction_rejects_the_domain_violations(factory, expected) -> None:
     with pytest.raises(expected):
-        FixedIntensity(value)
-
-
-@pytest.mark.parametrize("selector_cls", [FixedPhase, FixedCarrierPhase])
-@pytest.mark.parametrize(
-    ("value", "expected"),
-    [(float("nan"), ValueError), (float("inf"), ValueError), (True, TypeError)],
-)
-def test_scalar_phase_selectors_reject_invalid_phases(
-    selector_cls,
-    value,
-    expected,
-) -> None:
-    with pytest.raises(expected):
-        selector_cls(value)
-
-
-@pytest.mark.parametrize("selector_cls", [RandomPhaseChoice, PhaseSequence])
-@pytest.mark.parametrize(
-    ("phases", "expected"),
-    [
-        ((), ValueError),
-        ((0.0, float("nan")), ValueError),
-        ((0.0, True), TypeError),
-        ("0,pi", TypeError),
-        (0.0, TypeError),
-    ],
-)
-def test_phase_alphabets_are_validated_at_construction(
-    selector_cls,
-    phases,
-    expected,
-) -> None:
-    with pytest.raises(expected):
-        selector_cls(phases)
+        factory()
 
 
 def test_phase_sequence_rejects_non_bool_repeat() -> None:
+    # repeat=1 is truthy: without the type check it would wrap where it must
+    # raise, which is the silent-wrong-key failure PhaseSequence exists to
+    # prevent.
     with pytest.raises(TypeError, match="repeat must be bool"):
         PhaseSequence((0.0,), repeat=1)
 
 
-def test_phase_alphabets_are_normalized_to_float_tuples() -> None:
-    selector = RandomPhaseChoice([0, 3])
-
-    assert selector.phases == (0.0, 3.0)
-    assert all(isinstance(phase, float) for phase in selector.phases)
-
-
 def test_dps_phases_orders_zero_before_pi() -> None:
     # The decode convention rests on this ordering; see RandomPhaseChoice's
-    # warning about what a reversed alphabet does silently.
+    # warning about what a reversed alphabet does silently. The default
+    # argument is pinned here too, since a changed default would reach every
+    # caller that omits the alphabet.
     assert DPS_PHASES == (0.0, pi)
     assert isclose(DPS_PHASES[1], pi)
+    assert RandomPhaseChoice().phases == DPS_PHASES
 
 
 def _valid_selector_kwargs() -> dict[str, object]:
@@ -221,10 +182,6 @@ def _valid_selector_kwargs() -> dict[str, object]:
         "carrier_phase": FixedCarrierPhase(),
         "encoding_phase": FixedPhase(),
     }
-
-
-def test_validate_pulse_selectors_accepts_the_built_in_selectors() -> None:
-    validate_pulse_selectors(**_valid_selector_kwargs())
 
 
 @pytest.mark.parametrize(

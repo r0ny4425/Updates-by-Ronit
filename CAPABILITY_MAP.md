@@ -89,160 +89,52 @@ Each lab is a focused notebook. Read one lab, not the whole tutorial set.
 | Spec says | Module | Notes |
 |---|---|---|
 | single-photon source, heralded single photon | `simyuj.components.sources.SinglePhotonSource` | `frequency_hz`, `emission_probability`, `wavelength_nm`, `duration_s`, `encoding_scheme`, `sampler`, `timing_profile`. Zero-or-one photon backed by a one-qubit qstate |
-| WCP, weak coherent pulse, attenuated laser | `simyuj.components.sources.WeakCoherentPulseSource` | `frequency_hz`, `mean_photon_number`, `wavelength_nm`, `duration_s`, `encoding_scheme`, `timing_profile`. Non-sampling: every active slot emits one pulse carrying the same `CoherentState`, and no qstate record is created |
 | entangled pair source, SPDC, EPR source | `simyuj.components.sources.EntangledPairSource` | Two quantum output ports |
-| optical amplitude of a pulse | `simyuj.signal.CoherentState` | `alpha` is the only stored field; `mean_photon_number` and `phase_rad` are derived. `from_mean_photon_number(mu, phase_rad=)`, `with_phase_shift(theta)`, `attenuated(power_transmission)` |
 | which states are emitted, state distribution | `simyuj.qstate.StateSampler` | `states`, `probabilities`, `rep="ket"`, `labels` |
 | emission jitter, timing profile | `simyuj.components.GaussianTiming` | `mean_emission_delay_ticks`, `emission_delay_stddev_ticks`, `max_emission_delay_ticks` |
 | encoding basis (polarization, time-bin) | `simyuj.signal.EncodingScheme` | |
 | source reports | `SourcePreparationReport` | Delivered to agent via `AGENT_REPORT` port |
 
-**Not modeled natively:** decoy states, multi-photon/photon-number statistics beyond
-`emission_probability`, heralded sources. These are protocol-level additions —
-implement in the agent, not the component, unless a real new device is required.
+**Not modeled natively:** weak coherent pulses / attenuated lasers, optical field
+amplitudes, decoy states, multi-photon/photon-number statistics beyond
+`emission_probability`, heralded sources. There is no coherent-pulse source and no
+amplitude type in `src/`; `Signal` carries qstate references only. Decoy states and
+photon-number statistics are protocol-level additions — implement in the agent, not
+the component, unless a real new device is required. A WCP source *is* a real new
+device; see `docs/dev/dps-design.md`.
 
 ### 3.2 Channels
 
 | Spec says | Module | Parameters seen in working code |
 |---|---|---|
 | optical fiber, quantum channel, lossy link | `simyuj.components.channels.QuantumChannel` | `length_m`, `propagation_speed_m_per_s`, `attenuation_db_per_km`, `fixed_insertion_loss_db`, `timing_jitter_stddev_ticks`, `noise_models=(...)` |
-| coherent-pulse transport, phase-encoded fiber | the same `QuantumChannel` | adds `phase_noise_stddev_rad`. Do **not** build a parallel classical channel |
 | public/authenticated classical channel | `simyuj.components.channels.ClassicalChannel` | `length_m`, `fiber_speed_m_per_s`, `loss_probability`, `session_id` |
 | channel actions | `ACTION_TRANSMIT_QUANTUM`, `ACTION_TRANSMIT_CLASSICAL` | Used as `target_action` in `wire_ports` |
 
 Distance → loss and distance → delay are handled by the channel. Do **not** hand-compute
 attenuation in the agent.
 
-**The channel branches on payload.** A qstate-backed signal takes the Bernoulli
-survival path; a signal carrying a `coherent_state` takes a deterministic one:
-`α → √η·α·e^{iδφ}` at a fixed delay, where η is the *same* power transmission
-(`survival_probability`) the qubit path uses as a survival probability. One
-physical property of the fiber, two correct consequences. Carrying things is a
-transport component's job, so it accepts both — unlike a transform component such
-as `PhaseModulator`, which rejects what it cannot transform.
+`QuantumChannel` handles exactly one payload kind: a qstate-backed `Signal`. Every
+accepted signal takes the Bernoulli survival path, and
+`qstate_targets_from_signal` (`components/quantum_targets.py`) raises for a signal
+with no `state_ref`. There is no coherent-amplitude path and no
+`phase_noise_stddev_rad`.
 
-Consequences worth knowing before reading a coherent run's counters:
+**Not modeled natively:** coherent-pulse / optical-amplitude transport,
+free-space/atmospheric channels, wavelength-dependent loss, polarization-mode
+dispersion, active channel drift. Approximate with the existing loss +
+noise_models, and say so explicitly in the report.
 
-- μ scales as η, not √η. μ=0.2 through η=0.1 is μ=0.02.
-- **Nothing is discarded**, so `lost_count` is always 0 and `delivered_count`
-  equals `received_count` however lossy the fiber is. Loss appears as reduced μ;
-  the `pulse_forwarded` log record carries `mean_photon_number_in` and
-  `mean_photon_number_out`. Reading `channel_lost == 0` as "lossless" is a trap.
-- Total attenuation **delivers coherent vacuum**, it does not drop the pulse.
-  Deciding no photon was seen is the detector's job.
-- The loss RNG stream is never consumed on this path. Attenuation is arithmetic,
-  not sampling.
-- Metadata is `channel_power_transmission`, not `survival_probability` — a pulse
-  that never faced a Bernoulli trial must not carry a record claiming it did.
-- Adjacent-pulse spacing is preserved (fixed delay), which is what a delay
-  interferometer downstream needs.
+### 3.3 Modulators and interferometers
 
-Three configurations are **rejected** rather than silently ignored for a coherent
-pulse: `timing_jitter_stddev_ticks` (independent per-pulse jitter destroys pulse
-spacing and can reorder pulses), `noise_models` (Kraus operators on qubit axes
-have no representation for an optical amplitude), and a signal carrying both
-`state_ref` and `coherent_state`.
+**Neither exists.** There is no `simyuj.components.modulators` package, no
+`simyuj.components.interferometers` package, no `PhaseModulator`, and no
+`DelayInterferometer`. There is also no beamsplitter arithmetic anywhere in
+`src/` and no pulse-envelope field on `Signal`.
 
-**Not modeled natively:** free-space/atmospheric channels, wavelength-dependent loss,
-polarization-mode dispersion, active channel drift. Approximate with the existing
-loss + noise_models, and say so explicitly in the report. For coherent pulses see
-section 5 — the phase-noise model in particular is independent per pulse, which is
-pessimistic for closely spaced pulses.
-
-### 3.3 Modulators
-
-| Spec says | Module | Parameters |
-|---|---|---|
-| phase modulator, phase encoder, DPS/DQPS encoder | `simyuj.components.modulators.PhaseModulator` | `device_id`, `phase_selector`. Applies `alpha -> alpha * exp(i*theta)`; lossless, instantaneous, no qstate |
-| which phase per pulse | `FixedPhase`, `RandomPhaseChoice`, `PhaseSequence` | Frozen strategy objects. Default is `RandomPhaseChoice(phases=DPS_PHASES)`, uniform over `(0, pi)` |
-| modulator actions | `ACTION_MODULATE_PHASE` | Used as `target_action` in `connect_ports` / `wire_ports` |
-| modulator output | `PhaseModulationReport` | Carries the *requested* `phase_rad`, `phase_index`, `modulation_index`, and the incoming `pulse_index`. No label field: a phase is fully described by its value and index |
-
-A modulator transforms a signal in flight: one input port, one output port, no
-self-scheduled emissions, and signal identity preserved across the transform. A
-signal arriving without a `coherent_state` is rejected, not passed through.
-
-The applied `theta` is **not** recoverable from the amplitude afterwards.
-`CoherentState.phase_rad` is the total wrapped phase; read the report or the
-signal metadata for what the modulator actually imposed.
-
-**Not modeled natively:** insertion loss, finite extinction ratio, modulation
-bandwidth / rise time, residual chirp. See section 5.
-
-### 3.3b Interferometers
-
-| Spec says | Module | Parameters |
-|---|---|---|
-| delay interferometer, unbalanced Mach-Zehnder, DPS/DQPS receiver | `simyuj.components.interferometers.DelayInterferometer` | `device_id`, and **exactly one** of `delay_s` / `delay_ticks`, plus `flush_priority` |
-| interferometer actions | `ACTION_INTERFERE` (ingress), `ACTION_RESOLVE_BS2`, `ACTION_FLUSH_DELAY_ARM` (both self-scheduled) | `ACTION_INTERFERE` is the `target_action` in `connect_ports` |
-| interferometer output | two quantum egress ports, `out_0` and `out_1` | The only component in the repo with two quantum output ports. **Both must be connected.** `out_0` is the destructive port when the arms are in phase |
-| what happened in a slot | `InterferenceReport` | `temporal_overlap`, `delta_ticks`, both BS2 ticks, `mean_photon_number_in/_0/_1`, and `short_pulse_index` / `long_pulse_index` |
-| beamsplitter arithmetic | `signal.optical.split_50_50`, `interfere`, `gaussian_temporal_overlap` | Module-level functions; unit-testable without a timeline |
-| pulse temporal envelope | `Signal.temporal_mode_sigma_s`, `WeakCoherentPulseSource(temporal_mode_sigma_s=...)` | Seconds. **Field**-envelope standard deviation |
-
-**One equation, no decision tree.** Every recombination is
-
-```
-mu_0 = ½[|α_s|² + |α_l|² − 2·Re(α_s* · α_l · γ)]
-mu_1 = ½[|α_s|² + |α_l|² + 2·Re(α_s* · α_l · γ)]
-```
-
-Vacuum inputs, `γ = 0`, unequal amplitudes, the first pulse, and the last pulse
-are values of that equation, not branches around it — a vacuum arm kills the
-interference term for any `γ`, because the term is proportional to both
-amplitudes. `mu_0 + mu_1 = mu_s + mu_l` holds exactly at every `γ`; that is the
-invariant that catches a convention error, and every test asserts it.
-
-**Beamsplitter convention: the real 50:50 matrix `(1/√2)[[1,−1],[1,1]]` at both
-splitters**, stated once at the top of `signal/optical.py` and used everywhere
-including the tests. The symmetric `[[1,i],[i,1]]` convention is the same
-physical device and differs only by an unobservable global phase on `out_1`; the
-real one is chosen because it puts the interference term in `Re` rather than
-`Im`, matching the equations above.
-
-**Where γ comes from.** An amplitude does not say *when* the light is, so the
-temporal envelope travels separately on `Signal.temporal_mode_sigma_s` — a mode
-property, so it sits beside `wavelength_nm` rather than inside `CoherentState`,
-and `PhaseModulator` and `QuantumChannel` carry it through with no code of their
-own. σ is defined by `f(t) = (πσ²)^(−1/4)·exp[−(t−t₀)²/2σ²]` with `∫|f|² = 1`,
-so it is the **field** envelope's standard deviation; the intensity FWHM is
-`2√(ln2)·σ ≈ 1.665σ`. For equal widths `γ = exp(−Δt²/4σ²)` — an
-*intensity*-envelope σ would put an 8 in that denominator, and the two must not
-be mixed. A pulse with `temporal_mode_sigma_s=None` is **rejected**, by the same
-transform-rejects rule as `PhaseModulator`.
-
-**Timing is observed, never corrected.** BS1 acts at the actual arrival tick, so
-a late pulse interferes less rather than being realigned. The component never
-validates τ against the pulse period: it does not know the period, and taking it
-as configuration would put the source's `frequency_hz` in two places.
-
-Consequences worth knowing before reading a run's output:
-
-- **An N-pulse train gives N+1 output slots.** The first pulse's short arm and
-  the last pulse's long arm each meet vacuum and split 50:50, carrying no bit.
-- **Nearest-neighbour only.** One contribution is held at a time, so each pulse
-  pairs with its immediate predecessor. τ ≈ T is the intended regime; τ = 2T is
-  *not* supported — see section 5.
-- **The flush deadline is that assumption, not a decay estimate.** A held arm is
-  combined with vacuum at `arrival + 2τ`. At σ comparable to τ the discarded
-  overlap is still ~0.78. A pulse arriving at exactly `arrival + 2τ` pairs; one
-  tick later it does not.
-- `flush_priority` (default 10000) must stay strictly above the upstream
-  `delivery_priority` (default 0), or the boundary above inverts.
-- **Outputs are new optical events** with new ids, like a memory re-emission and
-  unlike a modulator transform. Both contributing `pulse_index` values travel in
-  the metadata and the report; `None` there means that arm was vacuum.
-- **Outputs are intensity-exact and mode-truncated.** At |γ| < 1 the port field
-  is a superposition of two non-identical envelopes. `mean_photon_number` is
-  exact; the phase is the interfering component's and the width is the short
-  arm's, and **neither may be used for a further phase-sensitive or
-  temporal-mode interference**. At |γ| = 1 all three are exact.
-- **No RNG streams at all.** The device is ideal by specification, so `bind`
-  declares none rather than declaring one that is never consumed.
-- A run must reach `last_arrival + 2τ`, or the final slot never executes.
-
-**Not modeled natively:** insertion loss, arm imbalance, non-ideal splitting
-ratio, arm-length drift, polarization mismatch between arms. See section 5.
+A phase-encoded protocol (DPS, DQPS, COW) therefore has no receiver in this
+repo today. Report it as a gap. The design for building one is
+`docs/dev/dps-design.md`; do not infer an API from this section.
 
 ### 3.4 Detectors
 
@@ -302,7 +194,7 @@ Bell-diagonal records stay compact for supported Pauli noise.
 | Pauli frame tracking | `ops.frame` |
 | Bell correction after BSM | `ops.correction_for_bell` |
 | fidelity, state metrics | `qstate.state.metric` — `fidelity` |
-| Bell states | `qstate.state` — `bell_vector`, `bell_density_matrix`, `BellDiagState` |
+| Bell states | `qstate.measure.bell` — `bell_vector`, `bell_vectors`, `bell_density_matrix`. `BellDiagState` is the one that lives in `qstate.state` |
 | basis states | `qstate.state` — `zero`, `plus_i`, etc. |
 | projective measurement | `qstate.measure.projective`, `.basis`, `.result` |
 | POVM | `qstate.measure.povm` |
@@ -391,7 +283,7 @@ agent starts. Use `runtime.run()` for the normal lifecycle.
 | Spec says | API (`simyuj.tracing`) |
 |---|---|
 | event log, run trace | `SimulationLogger`, `NullLogger` |
-| log verbosity | `LogLevel` (INFO / TRACE) |
+| log verbosity | `LogLevel` — an `IntEnum`, least to most verbose: `OFF`(0), `ERROR`, `WARNING`, `INFO`, `DEBUG`, `TRACE`(5). A logger at a level emits that level and every lower one. **Most component records are `DEBUG`** — `signal_forwarded`, source `emit` — so a run traced at `INFO` shows almost no device activity |
 | persist a run | `JsonlSink` |
 | human-readable output | TextSink |
 
@@ -421,52 +313,21 @@ Save a JSONL event log when ordering is unclear.
 Not natively modeled. If the spec requires one, report it as a gap and propose either an
 approximation or a new component:
 
+- **Weak coherent pulses and optical field amplitudes.** There is no coherent
+  source, no amplitude on `Signal`, no optical arithmetic module, no phase
+  modulator, and no interferometer. Everything downstream of that — DPS, DQPS,
+  COW, decoy-state BB84, phase encoding of any kind, beamsplitters, and
+  interference visibility — is unbuilt, not merely unparameterized. Report the
+  whole family as a gap. The design for building it is `docs/dev/dps-design.md`
 - Decoy-state BB84 (photon-number statistics)
 - Free-space / satellite channels, atmospheric turbulence
 - Continuous-variable QKD (repo is discrete-variable)
 - Wavelength multiplexing, frequency conversion
 - Active feedback / drift compensation
-- Modulator insertion loss (the phase modulator is lossless)
-- Modulator finite extinction ratio (an imposed phase is exact)
-- Modulator bandwidth / rise time (modulation is instantaneous)
-- Modulator residual chirp (phase modulation does not disturb amplitude)
-- Chromatic dispersion and pulse broadening for coherent pulses. A pulse's
-  temporal envelope *is* now described, by `Signal.temporal_mode_sigma_s`, but
-  nothing broadens it in flight: the channel carries the field through
-  unchanged, so a long fiber does not reduce interference visibility the way a
-  real one would
-- Non-Gaussian pulse envelopes (`gaussian_temporal_overlap` is the only overlap
-  model; a sech² or square envelope would need its own closed form)
-- Delay-interferometer insertion loss, arm imbalance, and non-ideal splitting
-  ratio (the device is ideal; every imperfection must arrive with the pulses)
-- Delay-interferometer arm-length drift, thermal or mechanical (τ is fixed for
-  the whole run, and there is no internal phase noise)
-- Polarization mismatch between interferometer arms (the modelled overlap γ is
-  purely temporal)
-- **τ ≠ T_pulse for the delay interferometer.** One long-arm contribution is
-  held at a time, so pairing is nearest-neighbour only. A τ of two slot periods
-  would need pulse *k* to meet pulse *k+2*, but pulse *k+1* arrives first and
-  takes the holder. Arbitrary τ needs a keyed queue and belongs in a separate
-  component; report it as a gap rather than configuring τ = 2T and reading the
-  result
-- Phase-sensitive or temporal-mode use of a delay-interferometer output at
-  |γ| < 1. The port field is then a superposition of two non-identical
-  envelopes; the emitted signal keeps the exact mean photon number but its
-  phase and width are a truncation. Chaining a second interferometer, or any
-  downstream device that treats those as physical, is outside the model
-- Nonlinear fiber effects on coherent pulses (SPM, XPM, four-wave mixing)
-- Frequency-dependent loss and polarization for coherent pulses
-- Per-pulse timing jitter for coherent pulses (rejected, not modelled — it
-  destroys the adjacent-pulse spacing interference depends on)
-- Correlated channel phase drift. `phase_noise_stddev_rad` draws **independently
-  per pulse**, so the differential phase between adjacent pulses has variance
-  `2σ_φ²`. Real fiber phase noise over a slot period of order a nanosecond is
-  strongly correlated between neighbours, so this model *over-estimates*
-  differential-phase error — a phase-encoded protocol's QBER will read
-  pessimistic at any given σ_φ. A Wiener/Ornstein-Uhlenbeck drift is a different
-  model with its own state; report the discrepancy rather than tuning σ_φ to hide it
-- Qstate noise applied to a coherent pulse (rejected: Kraus operators are shaped
-  `(2**arity, 2**arity)` and have no representation for an optical amplitude)
-- Optical gain / amplification (`attenuated` rejects η > 1)
+- Chromatic dispersion and pulse broadening
+- Nonlinear fiber effects (SPM, XPM, four-wave mixing)
+- Frequency-dependent loss; polarization-mode dispersion
+- Channel phase drift of any kind, correlated or independent
+- Optical gain / amplification
 - Detector crosstalk between array elements
 - Finite-key security proofs beyond the teaching-level budget in the BB84 example

@@ -33,7 +33,21 @@ from .memories import (
     QuantumMemory,
 )
 from .ports import Port, PortDirection, PortKind
-from .sources.reports import SourcePreparationReport
+from .sources.coherent_preparation import (
+    DPS_PHASES,
+    CarrierPhaseSelector,
+    EncodingPhaseSelector,
+    FixedCarrierPhase,
+    FixedIntensity,
+    FixedPhase,
+    IntensitySelection,
+    IntensitySelector,
+    PerPulseRandomCarrierPhase,
+    PhaseSelection,
+    PhaseSequence,
+    RandomPhaseChoice,
+)
+from .sources.reports import CoherentPulsePreparationReport, SourcePreparationReport
 from .sources.single_photon_source import (
     ACTION_EMIT,
     ACTION_START,
@@ -43,6 +57,7 @@ from .sources.single_photon_source import (
     GaussianTiming,
     SinglePhotonSource,
 )
+from .sources.weak_coherent_pulse_source import WeakCoherentPulseSource
 
 __all__ = [
     "ACTION_EMIT",
@@ -50,18 +65,30 @@ __all__ = [
     "ACTION_START",
     "ACTION_TRANSMIT_CLASSICAL",
     "ACTION_TRANSMIT_QUANTUM",
+    "CarrierPhaseSelector",
     "ClassicalChannel",
+    "CoherentPulsePreparationReport",
     "DEFAULT_FIBER_LIGHT_SPEED_M_PER_S",
+    "DPS_PHASES",
     "DeltaTiming",
     "EmissionTimingProfile",
+    "EncodingPhaseSelector",
     "ExGaussianTiming",
+    "FixedCarrierPhase",
+    "FixedIntensity",
+    "FixedPhase",
     "GaussianTiming",
+    "IntensitySelection",
+    "IntensitySelector",
     "MEMORY_ABSORB",
     "MEMORY_APPLY_OPERATOR",
     "MEMORY_DISCARD",
     "MEMORY_EMIT",
     "MEMORY_EXPIRE",
     "MEMORY_MEASURE",
+    "PerPulseRandomCarrierPhase",
+    "PhaseSelection",
+    "PhaseSequence",
     "Port",
     "PortConnection",
     "PortDelivery",
@@ -69,8 +96,10 @@ __all__ = [
     "PortKind",
     "QuantumMemory",
     "QuantumChannel",
+    "RandomPhaseChoice",
     "SinglePhotonSource",
     "SourcePreparationReport",
+    "WeakCoherentPulseSource",
     "connect_ports",
     "default_connection_id",
     "require_connection",

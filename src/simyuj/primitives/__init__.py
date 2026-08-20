@@ -13,10 +13,11 @@ from importlib import import_module
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from . import ids, meta, subsystems, units, validation
+    from . import coherent_state, ids, meta, subsystems, units, validation
     from .messages import ClassicalMessage, DeliveryReport, QuantumTransitPayload
 
 _SUBMODULE_EXPORTS = {
+    "coherent_state",
     "ids",
     "meta",
     "subsystems",
@@ -64,6 +65,7 @@ __all__ = [
     "ClassicalMessage",
     "DeliveryReport",
     "QuantumTransitPayload",
+    "coherent_state",
     "ids",
     "meta",
     "subsystems",

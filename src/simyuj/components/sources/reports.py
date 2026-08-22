@@ -1,6 +1,6 @@
 """Source-side preparation reports.
 
-Source reports describe successful preparation choices. They are local
+Source reports describe successful qstate preparation choices. They are local
 control-plane payloads and do not represent inter-node classical messages. Any
 qstate identifiers in a report are descriptive handles for correlation and
 follow-up requests; they do not transfer qstate ownership to the receiving
@@ -19,7 +19,7 @@ reads.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Union
+from typing import Optional, TypeVar, Union
 
 from simyuj.components.ports import Port
 from simyuj.engine.timeline import Timeline
@@ -158,12 +158,21 @@ class CoherentPulsePreparationReport:
 SourceReport = Union[SourcePreparationReport, CoherentPulsePreparationReport]
 """Any report a source component may store and transmit."""
 
+_ReportT = TypeVar("_ReportT", bound=SourceReport)
+"""One concrete source report type, tying ``reports`` to ``report``.
+
+``list`` is invariant, so a plain ``list[SourceReport]`` parameter would reject
+the ``list[SourcePreparationReport]`` that both existing sources pass. Binding
+the element type to the report's type accepts each source's own homogeneous list
+and additionally rejects storing one report kind in the other's list.
+"""
+
 
 def store_source_report(
     *,
-    reports: list,
+    reports: list[_ReportT],
     report_port: Port,
-    report: SourceReport,
+    report: _ReportT,
     timeline: Timeline,
     source: object,
 ) -> None:

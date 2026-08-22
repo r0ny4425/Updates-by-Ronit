@@ -393,19 +393,27 @@ class Signal:
         Building a fresh ``Signal(...)`` at the call site instead would be
         strictly worse: a newly added field would silently take its declared
         default at every construction site, with nothing raising at all.
+
+        The copy runs in two phases -- copy every field, then overwrite the named
+        replacements -- rather than deciding per field whether it is being
+        replaced. Both phases use the precomputed slot descriptors in
+        :data:`_SIGNAL_ACCESSORS` and :data:`_SIGNAL_FIELD_SETTERS`, which avoids
+        a dict lookup and an attribute lookup per field. This sits on the copy
+        path of every signal in the simulator; see ``docs/dev/dps-design.md``
+        section 3, S3 for the measurements.
         """
         unknown = tuple(
-            name for name in replacements if name not in _SIGNAL_FIELD_NAMES
+            name for name in replacements if name not in _SIGNAL_FIELD_SETTERS
         )
         if unknown:
             raise TypeError(f"unknown Signal field(s): {', '.join(sorted(unknown))}")
 
         signal = object.__new__(type(self))
-        for name in _SIGNAL_FIELD_NAMES:
-            value = replacements.get(name, _KEEP)
-            if value is _KEEP:
-                value = getattr(self, name)
-            object.__setattr__(signal, name, value)
+        for _name, get, set_ in _SIGNAL_ACCESSORS:
+            set_(signal, get(self))
+        for name, value in replacements.items():
+            if value is not _KEEP:
+                _SIGNAL_FIELD_SETTERS[name](signal, value)
         return signal
 
     def _with_metadata(
@@ -427,6 +435,31 @@ _SIGNAL_FIELD_NAMES: tuple[str, ...] = tuple(f.name for f in fields(Signal))
 
 Derived from the dataclass rather than written out, so a field added later is
 carried through :meth:`Signal._derived` with no edit here. Guarded by a test.
+"""
+
+_SIGNAL_ACCESSORS: tuple[tuple[str, Any, Any], ...] = tuple(
+    (name, getattr(Signal, name).__get__, getattr(Signal, name).__set__)
+    for name in _SIGNAL_FIELD_NAMES
+)
+"""``(name, get, set)`` slot descriptors for every field, in declaration order.
+
+``Signal`` is ``slots=True``, so each field is a ``member_descriptor`` on the
+class. Binding ``__get__``/``__set__`` once at import removes a name lookup and a
+``dict`` lookup from every field of every copy, and the descriptors write through
+the frozen dataclass exactly as ``object.__setattr__`` does.
+
+Built from :data:`_SIGNAL_FIELD_NAMES`, so the existing test asserting that names
+tuple still matches ``dataclasses.fields(Signal)`` guards this table too -- there
+is no second list to keep in sync.
+"""
+
+_SIGNAL_FIELD_SETTERS: dict[str, Any] = {
+    name: set_ for name, _get, set_ in _SIGNAL_ACCESSORS
+}
+"""Setter descriptor per field name, for the replacement phase of ``_derived``.
+
+Also the membership test for the unknown-field check, which is why that check is
+a ``dict`` lookup rather than a scan of :data:`_SIGNAL_FIELD_NAMES`.
 """
 
 

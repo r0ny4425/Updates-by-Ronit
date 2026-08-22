@@ -418,10 +418,59 @@ Three details are load-bearing, all from the reference (section 11.2):
 - **Not a `_with_coherent_state` sibling.** S5's channel mutates amplitude *and*
   metadata, so two siblings means two hand-copies to keep in sync.
 
-Measured there at 1.5× the hand-copy (882 ns → 1287 ns), about 8% of one full
-`QuantumChannel._transmit_now` hop. A precomputed `(get, set)` variant recovers most
-of it and keeps the `fields(Signal)` derivation; not worth taking until something
-profiles signal copying as a bottleneck.
+**Cost: 2.58×, not the 1.5× an earlier version of this section recorded.**
+Re-measured against the shipped implementation in *this* clone, best of three
+runs of 300 000 iterations each, by executing `main`'s `_with_metadata` and the
+branch's side by side on the same signal:
+
+| Implementation | ns/call | vs `main` |
+|---|---:|---:|
+| `main`'s `_with_metadata` — 14 fields, straight line | 875 | 1.00× |
+| hand-written 17-field copy, same style | 1038 | 1.19× |
+| **shipped `_derived`** — 17 fields, loop + `dict.get` | **2258** | **2.58×** |
+| precomputed `(get, set)` pairs, two-phase | 1527 | 1.74× |
+
+Decomposition of the +1383 ns: **+163 ns from the three added fields, +1220 ns
+from the loop machinery** — so the regression is overwhelmingly the loop, not the
+wider record. Against the 5736 ns figure this document quotes for a full
+`QuantumChannel._transmit_now` hop, that is **about 25% of a hop, not 8%**.
+
+The superseded 1.5× / 8% figure came from a *different clone* running a
+*different* `_derived` (the reference implementation's), and was carried across
+without re-measurement. It should not have been quoted about code it did not
+measure.
+
+**The precomputed `(get, set)` variant was measured, and taken.** It recovers
+678 ns — half the total regression — taking 2.55× down to **1.78×**, and it keeps
+the `fields(Signal)` derivation:
+
+| Implementation | ns/call | vs `main` |
+|---|---:|---:|
+| `main`'s `_with_metadata` | 876 | 1.00× |
+| loop + `dict.get` (superseded) | 2234 | 2.55× |
+| **precomputed descriptors (shipped)** | **1557** | **1.78×** |
+
+Two module-level tables built from `_SIGNAL_FIELD_NAMES` — `_SIGNAL_ACCESSORS`,
+holding `(name, descriptor.__get__, descriptor.__set__)` per field, and
+`_SIGNAL_FIELD_SETTERS` keyed by name. `_derived` then runs in two phases: copy
+every field through the accessors, then overwrite only the named replacements,
+instead of asking `replacements.get(name, _KEEP)` seventeen times. Most of the
+win is the seventeen dict lookups that no longer happen; the bound descriptors
+are the smaller half. `Signal` is `slots=True`, so each field is a
+`member_descriptor` whose `__set__` writes through the frozen dataclass exactly
+as `object.__setattr__` does.
+
+**No new guard is needed.** Both tables are derived from `_SIGNAL_FIELD_NAMES`,
+so the existing test asserting that tuple still equals `fields(Signal)` covers
+them; there is no second list to keep in sync.
+
+Equivalence with the superseded loop was verified by executing both over 54
+replacement patterns × 2 `validation_flag` settings on a signal with all
+seventeen fields non-default: every field replaced alone, `_KEEP` on every field,
+`_KEEP` mixed with a real replacement, all seventeen replaced at once, and the
+empty call. Field values and types identical, `__eq__` identical, references
+shared rather than copied (`state_targets is` the original tuple), and the
+`unknown Signal field(s): amplitude, zzz` message byte-identical.
 
 This is what makes every later step additive: after S3, a new `Signal` field is
 carried through the channel with no edit anywhere. Ship it with the S10 test that
@@ -1837,11 +1886,19 @@ make it work, all adopted into S3:
   *and* metadata, so two siblings means two hand-copies to keep in sync, of which
   the guard tests covered only one.
 
-Measured cost, from the memo: the loop is 1.5× the hand-copy (882 ns → 1287 ns),
-which is ~8% of one full `QuantumChannel._transmit_now` hop (5736 ns); the copy
-itself is 24% of a hop. A precomputed `(get, set)` variant recovers most of it
-(974 ns, 1.10×) while still deriving its field list from `fields(Signal)`. Not
-taken, correctly — nothing profiles signal copying as a bottleneck.
+Cost, as the memo recorded it: the loop is 1.5× the hand-copy (882 ns →
+1287 ns), ~8% of one full `QuantumChannel._transmit_now` hop (5736 ns), with a
+precomputed `(get, set)` variant recovering most of it (974 ns, 1.10×).
+
+**Those numbers do not describe the implementation that shipped here.** They were
+measured in a different clone against the reference's `_derived`, and were quoted
+in section 3 without being re-run. Re-measured against the loop implementation
+that actually shipped, it cost **2.55×** (876 ns → 2234 ns), about **25% of a
+hop** rather than 8%. The memo's conclusion — that the precomputed variant is
+worth having — held up; its magnitudes did not. That variant is now shipped and
+lands at 1.78×, not the 1.10× the memo predicted. Section 3's S3 carries the
+tables, the decomposition, and the equivalence check; this paragraph is retained
+only to record that the memo's figures were inherited rather than verified.
 
 This supersedes S3 as originally written. The completeness test in S10 stays: it
 now asserts that `_SIGNAL_FIELD_NAMES` still equals `fields(Signal)`, which is the

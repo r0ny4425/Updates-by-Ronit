@@ -18,18 +18,56 @@ This module takes no RNG and returns no random value, which makes "nothing here
 samples a photon number" structural rather than a comment. Photon statistics are
 integrated in closed form at detection.
 
-Shipped when their first caller exists, not before: ``split_50_50``,
-``interfere``, ``gaussian_temporal_overlap``, ``click_probability``,
+Shipped when their first caller exists, not before: ``click_probability``,
 ``polarization_weights``, ``rotated_polarization``.
+
+Beamsplitter convention
+-----------------------
+
+Both splitters use the **real** 50:50 matrix
+
+.. math::
+
+   \\frac{1}{\\sqrt{2}}\\begin{pmatrix} 1 & -1 \\\\ 1 & 1 \\end{pmatrix}
+
+stated here once and used by :func:`split_50_50`, :func:`interfere`, and the
+tests. The symmetric convention
+:math:`\\tfrac{1}{\\sqrt2}\\bigl(\\begin{smallmatrix}1 & i\\\\ i &
+1\\end{smallmatrix}\\bigr)` is the *same physical device*: it gives an identical
+port 0 and a port 1 differing only by an unobservable global :math:`i`. The two
+differ in where the interference term lands -- :math:`\\operatorname{Im}` for
+the symmetric one, :math:`\\operatorname{Re}` for the real one -- and
+:math:`\\operatorname{Re}` is chosen so the :math:`\\mu` equations below read
+the way the tests are written. **Never mix them.** A specification that writes
+:math:`a_l = i\\alpha/\\sqrt2` at the first splitter *and* :math:`\\mu`
+equations in :math:`\\operatorname{Re}` is internally inconsistent; the
+:math:`i` does not remove interference, it moves it to
+:math:`\\operatorname{Im}`.
 """
 
 from __future__ import annotations
 
 import cmath
-from math import sqrt
+from math import exp, isfinite, sqrt
 
 from simyuj.primitives.coherent_state import CoherentState
-from simyuj.primitives.validation import require_finite_real, require_probability
+from simyuj.primitives.validation import (
+    require_finite_real,
+    require_positive_real,
+    require_probability,
+)
+
+_SQRT2 = sqrt(2.0)
+"""Amplitude divisor for a 50:50 splitter, computed once."""
+
+_OVERLAP_MODULUS_ATOL = 1e-12
+"""Slack allowed above ``abs(overlap) == 1`` before it is rejected.
+
+An overlap is an inner product of two normalized temporal modes, so
+Cauchy-Schwarz caps its modulus at one. The tolerance admits a value that a
+caller computed and rounded just past the cap; anything further is a bug in the
+caller, not floating point.
+"""
 
 
 def _require_coherent_state(state: object, *, field_name: str) -> CoherentState:
@@ -37,6 +75,29 @@ def _require_coherent_state(state: object, *, field_name: str) -> CoherentState:
     if not isinstance(state, CoherentState):
         raise TypeError(f"{field_name} must be CoherentState")
     return state
+
+
+def _require_overlap(value: object, *, field_name: str) -> complex:
+    """Return a finite overlap of modulus at most one, as ``complex``.
+
+    Accepts ``int``, ``float``, and ``complex``; rejects ``bool``, following
+    :class:`~simyuj.primitives.coherent_state.CoherentState` on the same
+    question.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float, complex)):
+        raise TypeError(f"{field_name} must be int, float, or complex")
+
+    resolved = complex(value)
+    if not isfinite(resolved.real) or not isfinite(resolved.imag):
+        raise ValueError(f"{field_name} must have finite real and imaginary parts")
+
+    modulus = abs(resolved)
+    if modulus > 1.0 + _OVERLAP_MODULUS_ATOL:
+        raise ValueError(
+            f"{field_name} must have modulus at most 1, got {modulus!r}",
+        )
+
+    return resolved
 
 
 def attenuated(
@@ -154,7 +215,273 @@ def phase_shifted(state: CoherentState, *, phase_rad: float) -> CoherentState:
     return CoherentState(resolved.alpha * cmath.rect(1.0, theta))
 
 
+def split_50_50(state: CoherentState) -> tuple[CoherentState, CoherentState]:
+    """Split `state` at a 50:50 beamsplitter with vacuum on the second input.
+
+    Parameters
+    ----------
+    state : CoherentState
+        Amplitude entering port 0 of the splitter.
+
+    Returns
+    -------
+    tuple[CoherentState, CoherentState]
+        Both output arms, each carrying
+        :math:`\\alpha/\\sqrt{2}` and therefore :math:`\\mu/2`.
+
+    Raises
+    ------
+    TypeError
+        If `state` is not a ``CoherentState``.
+
+    Notes
+    -----
+    With vacuum on the second input the module's real 50:50 matrix gives
+    :math:`(\\alpha - 0)/\\sqrt2` and :math:`(\\alpha + 0)/\\sqrt2`, which are
+    equal. **The same immutable object is returned twice**, so
+    ``left is right``. That is safe because ``CoherentState`` is frozen, and it
+    is worth knowing before writing an identity assertion that means to test
+    something else.
+
+    Under the symmetric convention port 1 would carry
+    :math:`i\\alpha/\\sqrt2` instead. The mean photon numbers are identical;
+    only a later phase-sensitive recombination could tell the two apart, which
+    is exactly why the module fixes one convention -- see the module docstring.
+
+    This is the *lossless* splitter. A real device's insertion loss is not
+    modelled here; compose with :func:`attenuated` if it is needed.
+
+    Examples
+    --------
+    >>> left, right = split_50_50(CoherentState.from_mean_photon_number(0.4))
+    >>> round(left.mean_photon_number, 12), round(right.mean_photon_number, 12)
+    (0.2, 0.2)
+    >>> left is right
+    True
+    """
+    resolved = _require_coherent_state(state, field_name="state")
+    half = CoherentState(resolved.alpha / _SQRT2)
+    return half, half
+
+
+def gaussian_temporal_overlap(
+    *,
+    sigma_a_s: float,
+    sigma_b_s: float,
+    delta_s: float,
+) -> float:
+    """Return the mode overlap of two Gaussian pulses separated in time.
+
+    Parameters
+    ----------
+    sigma_a_s, sigma_b_s : float
+        Positive **field**-envelope standard deviations in seconds, as carried
+        by ``Signal.temporal_mode_sigma_s``.
+    delta_s : float
+        Finite separation between the two envelope **centres**, in seconds. The
+        result depends only on its magnitude.
+
+    Returns
+    -------
+    float
+        Overlap :math:`\\gamma` in ``(0, 1]``, where
+
+        .. math::
+
+           \\gamma = \\sqrt{\\frac{2\\sigma_a\\sigma_b}
+                                 {\\sigma_a^2 + \\sigma_b^2}}
+                     \\exp\\!\\left[-\\frac{\\Delta t^{2}}
+                                          {2(\\sigma_a^2 + \\sigma_b^2)}\\right]
+
+    Raises
+    ------
+    TypeError
+        If any argument is not numeric, or is ``bool``.
+    ValueError
+        If either width is zero, negative, ``nan``, or infinite, or if
+        `delta_s` is ``nan`` or infinite.
+
+    Notes
+    -----
+    **Field envelope, so equal widths give a denominator of 4.** At
+    :math:`\\sigma_a = \\sigma_b = \\sigma` this reduces to
+    :math:`\\exp[-\\Delta t^2/(4\\sigma^2)]`. An *intensity*-envelope
+    :math:`\\sigma` would give 8. The two parameterisations differ by
+    :math:`\\sqrt2` in the width and must never be mixed; this module and
+    ``Signal.temporal_mode_sigma_s`` are both field-envelope throughout.
+
+    **``delta_s`` is a centre-to-centre separation.** ``Signal`` fixes the
+    convention that a signal's tick is the centre of its temporal mode, so a
+    caller computes this from a tick difference and nothing else -- see
+    ``Signal.temporal_mode_sigma_s``.
+
+    Keyword-only, because three floats in a row are trivially transposable and
+    two of them are interchangeable while the third is not.
+
+    **Zero width is rejected rather than special-cased.** The
+    :math:`\\sigma \\to 0` limit is a different, discrete model in which overlap
+    is an equality test on arrival ticks, and returning ``1.0`` or ``0.0`` from
+    here would quietly answer a question this formula was not asked. A caller
+    who wants that limit should pass a small width and see the exponential do
+    it.
+
+    The prefactor is the width mismatch alone: it is ``1.0`` at equal widths and
+    falls away as they diverge, so two pulses of different duration cannot
+    interfere perfectly even when perfectly aligned. At large separations the
+    exponential underflows to ``0.0``, which is the correct limit and not an
+    error.
+
+    Examples
+    --------
+    >>> gaussian_temporal_overlap(sigma_a_s=1e-11, sigma_b_s=1e-11, delta_s=0.0)
+    1.0
+    >>> round(
+    ...     gaussian_temporal_overlap(
+    ...         sigma_a_s=1e-11, sigma_b_s=1e-11, delta_s=2e-11
+    ...     ),
+    ...     12,
+    ... )
+    0.367879441171
+    """
+    sigma_a = require_positive_real(sigma_a_s, field_name="sigma_a_s")
+    sigma_b = require_positive_real(sigma_b_s, field_name="sigma_b_s")
+    delta = require_finite_real(delta_s, field_name="delta_s")
+
+    variance_sum = sigma_a * sigma_a + sigma_b * sigma_b
+    width_factor = sqrt(2.0 * sigma_a * sigma_b / variance_sum)
+    return width_factor * exp(-(delta * delta) / (2.0 * variance_sum))
+
+
+def interfere(
+    short_arm: CoherentState,
+    long_arm: CoherentState,
+    *,
+    overlap: complex = 1.0,
+) -> tuple[CoherentState, CoherentState]:
+    """Recombine two arms at a 50:50 beamsplitter.
+
+    Parameters
+    ----------
+    short_arm, long_arm : CoherentState
+        Amplitudes arriving at the two input ports. `short_arm` defines the
+        reference temporal mode; see the notes.
+    overlap : complex, default=1.0
+        Mode overlap :math:`\\gamma` between the two arms, of modulus at most
+        one. ``1.0`` means the arms occupy the same mode and interfere fully;
+        ``0.0`` means they cannot interfere at all.
+
+    Returns
+    -------
+    tuple[CoherentState, CoherentState]
+        Outputs of port 0 and port 1. Port 0 is the **destructive** port when
+        the arms are in phase.
+
+    Raises
+    ------
+    TypeError
+        If either arm is not a ``CoherentState``, or `overlap` is not numeric.
+    ValueError
+        If `overlap` is not finite, or its modulus exceeds one.
+
+    Notes
+    -----
+    The long arm is split into a component along the short arm's mode, of weight
+    :math:`\\gamma`, and an orthogonal remainder that cannot interfere:
+
+    .. math::
+
+       m = \\gamma\\,\\alpha_l, \\qquad
+       a_k = \\frac{\\alpha_s \\mp m}{\\sqrt2}, \\qquad
+       r = \\frac{(1 - |\\gamma|^2)\\,\\mu_l}{2}, \\qquad
+       \\mu_k = |a_k|^2 + r
+
+    This is algebraically identical to
+    :math:`\\mu_k = \\tfrac12[\\,\\mu_s + \\mu_l \\mp
+    2\\operatorname{Re}(\\overline{\\alpha_s}\\alpha_l\\gamma)\\,]` but keeps the
+    non-interfering light visible in the code rather than folded into an
+    algebraic identity.
+
+    **Energy is conserved at every overlap**: :math:`\\mu_0 + \\mu_1 =
+    \\mu_s + \\mu_l`. That identity is what catches a convention error, so it is
+    asserted on every case in the tests. It is also why the modulus of `overlap`
+    is bounded rather than accepted freely -- at :math:`|\\gamma| > 1` the
+    orthogonal remainder would go negative, the ``max`` clamp would hide it, and
+    the two ports would carry more light than entered.
+
+    **Vacuum inputs, zero overlap, unequal amplitudes, the first pulse of a
+    train and the last are values of this equation, not branches around it.**
+    Because the interference term is proportional to *both* amplitudes, a vacuum
+    partner kills it at any :math:`\\gamma`, and the result is a plain 50:50
+    split of whichever arm is present.
+
+    **The result is intensity-exact and mode-truncated.** At
+    :math:`|\\gamma| < 1` the field leaving a port is
+    :math:`\\alpha_s f_s(t) \\mp \\gamma\\alpha_l f_l(t)`, a superposition of two
+    non-identical envelopes that no single ``(alpha, sigma)`` pair describes. The
+    returned state carries the exact :math:`\\mu` *including* the orthogonal
+    residual, and the phase of the interfering component only. **Neither the
+    phase nor the width of an output may feed a further phase-sensitive or
+    temporal-mode interference.** At :math:`|\\gamma| = 1` all of it is exact.
+
+    The asymmetry between the arguments is the mode reference, not the physics:
+    :math:`\\gamma` projects the long arm onto the short arm's mode, so the
+    residual is the long arm's. A caller that swaps the arguments gets the same
+    two mean photon numbers, because the identity above is symmetric in
+    :math:`\\mu_s` and :math:`\\mu_l`, but the port-0 phase is taken from a
+    different reference.
+
+    **:math:`\\mu` does not round-trip bit-exactly.** The residual is added after
+    the amplitude is formed, so :math:`a_k` has the wrong modulus and the state
+    is rebuilt through ``from_mean_photon_number``, sending :math:`\\mu` through
+    ``sqrt`` and back. A :math:`\\mu` of ``0.2`` returns as
+    ``0.19999999999999998``. An analytically dark port lands wherever the
+    inputs' own rounding leaves it: exactly ``0.0`` for two equal real
+    amplitudes, and ``1.5e-33`` when one arm arrived through the ``exp(1j*pi)``
+    residue that :func:`phase_shifted` documents. Neither number is a
+    guarantee. Compare with a tolerance everywhere, and never assert a dark port
+    is ``== 0.0``.
+
+    Examples
+    --------
+    >>> arm = CoherentState.from_mean_photon_number(0.2)
+    >>> dark, bright = interfere(arm, arm)
+    >>> dark.mean_photon_number < 1e-30
+    True
+    >>> round(bright.mean_photon_number, 12)
+    0.4
+    """
+    short = _require_coherent_state(short_arm, field_name="short_arm")
+    long_ = _require_coherent_state(long_arm, field_name="long_arm")
+    gamma = _require_overlap(overlap, field_name="overlap")
+
+    mixed = gamma * long_.alpha
+    # max() guards the rounding of `1 - abs(gamma)**2` at abs(gamma) == 1, where
+    # it can land a few ulp below zero. The bound in _require_overlap means it
+    # can never be hiding a real negative.
+    residual = max(0.0, 1.0 - abs(gamma) ** 2) * long_.mean_photon_number / 2.0
+
+    outputs = []
+    for amplitude in (
+        (short.alpha - mixed) / _SQRT2,
+        (short.alpha + mixed) / _SQRT2,
+    ):
+        mean_photon_number = (
+            amplitude.real * amplitude.real + amplitude.imag * amplitude.imag + residual
+        )
+        outputs.append(
+            CoherentState.from_mean_photon_number(
+                mean_photon_number,
+                phase_rad=cmath.phase(amplitude),
+            )
+        )
+
+    return outputs[0], outputs[1]
+
+
 __all__ = [
     "attenuated",
+    "gaussian_temporal_overlap",
+    "interfere",
     "phase_shifted",
+    "split_50_50",
 ]

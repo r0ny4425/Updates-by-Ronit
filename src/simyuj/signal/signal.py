@@ -232,6 +232,27 @@ class Signal:
     with ``integral |f|**2 == 1``, so this is the **field** envelope's standard
     deviation and not the intensity envelope's.
 
+    **``t0`` is the signal's own tick, and the envelope is symmetric about it.**
+    That is a contract of this class, not a convention of any one component: a
+    signal's tick *is* the centre of its temporal mode. At a source that tick is
+    ``emission_time``; in flight it is the tick of the delivery event carrying
+    the signal, which the channel also records as ``channel_arrival_time`` in
+    ``timing_meta``. Every component that measures a tick against an envelope
+    depends on this. In particular a separation between two signals' envelope
+    centres is a plain difference of their delivery ticks, which is what
+    ``components.coherent_optics.gaussian_temporal_overlap`` takes as
+    ``delta_s`` -- under a leading-edge reading that separation would be wrong
+    whenever the two widths differ.
+
+    A tick is therefore a *centre*, never an onset. The one place that might
+    read otherwise is ``active_detection_duration_at_arrival`` in
+    ``components/detectors/primitives/window.py``, which measures a detector's
+    exposure forward from an arrival tick. **That is a different quantity and
+    does not conflict**: it describes when a *device* is open, a hardware gate
+    with its own start and end, not the shape of the light. A pulse remains
+    centred on its tick while the detector observing it counts forward from the
+    same tick.
+
     A property of the occupied mode rather than of the state occupying it, which
     is why it sits beside ``wavelength_nm`` rather than inside
     ``coherent_state``. It is **not** converted with ``seconds_to_ticks``: that

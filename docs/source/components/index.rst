@@ -71,6 +71,7 @@ Module Pages
 
    Ports and Connections <ports_connections>
    Quantum Targets <quantum_targets>
+   Coherent Optics <coherent_optics>
    Channels <channels>
    Sources <sources>
    Detectors <detectors>

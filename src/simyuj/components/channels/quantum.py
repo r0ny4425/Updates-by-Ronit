@@ -26,9 +26,10 @@ from simyuj.runtime.binding import BindingContext
 from simyuj.signal import Signal
 from simyuj.tracing.levels import LogLevel
 
+from ..coherent_optics import attenuated, phase_shifted
 from ..connections import PortDelivery, require_connection
 from ..ports import Port, PortKind
-from ..quantum_targets import qstate_targets_from_signal
+from ..quantum_targets import qstate_payload_role, qstate_targets_from_signal
 from ._common import _create_channel_ports, _non_negative_int, _resolve_delay_ticks
 
 if TYPE_CHECKING:
@@ -101,6 +102,11 @@ class QuantumChannel(Component):
         Optional session identifier copied into downstream event metadata.
     delivery_priority : int, default=0
         Priority used for the scheduled downstream event.
+    phase_noise_stddev_rad : float, default=0.0
+        Non-negative standard deviation of the per-pulse optical phase shift
+        applied on the coherent-amplitude path. Zero consumes no randomness and
+        is the default. Ignored by qstate-backed signals, which carry no
+        optical phase.
 
     Attributes
     ----------
@@ -141,14 +147,44 @@ class QuantumChannel(Component):
     the output port is assumed to be connected in a valid run setup.
 
     ``bind()`` declares timeline-owned RNG streams
-    ``(channel_id, "quantum_channel", "loss")`` and
-    ``(channel_id, "quantum_channel", "timing")`` before execution. A survival
-    probability of one avoids consuming the loss stream, and zero jitter avoids
-    consuming the timing stream.
+    ``(channel_id, "quantum_channel", "loss")``,
+    ``(channel_id, "quantum_channel", "timing")`` and
+    ``(channel_id, "quantum_channel", "phase")`` before execution. A survival
+    probability of one avoids consuming the loss stream, zero jitter avoids
+    consuming the timing stream, and zero phase noise avoids consuming the
+    phase stream.
+
+    Coherent-amplitude transport
+    ----------------------------
+
+    A ``Signal`` carrying a ``coherent_state`` takes a second path, chosen by
+    the **role** of its qstate record rather than by whether it has one -- see
+    ``qstate_payload_role``. On that path:
+
+    - ``eta`` is a **power transmission** rather than a survival probability,
+      so ``alpha -> sqrt(eta) * alpha`` and ``mu -> eta * mu``. It is the same
+      :math:`10^{-L/10}`; one fibre property with two correct consequences for
+      two different input states, and there is no second loss field.
+    - Attenuation is deterministic. The loss stream is never consumed, so an
+      all-amplitude run replays identically at any ``master_seed`` whatever the
+      configured loss.
+    - Nothing is discarded, so ``lost_count`` stays 0 and
+      ``delivered_count == received_count``. ``attenuated_count`` is the
+      counter that moves.
+    - ``timing_jitter_stddev_ticks`` must be zero, and ``noise_models`` must be
+      empty unless the signal carries a ``"mode"`` record. Both are rejected at
+      event time, because a channel cannot know at construction what it will
+      carry.
+    - ``phase_noise_stddev_rad`` applies an optical phase shift per pulse.
+
+    A ``"mode"`` record beside the amplitude -- a polarization state occupying
+    the pulse's mode -- takes ``noise_models`` through the ordinary Kraus path
+    and is **not** discarded by loss.
 
     This is a compact signal-level fiber model. It does not model pulse shape,
     dispersion, polarization drift, multi-photon optical modes, congestion, or
-    detector behavior.
+    detector behavior. Per-pulse phase noise is independent rather than
+    correlated between neighbours; see ``CAPABILITY_MAP.md`` section 5.
     """
 
     channel_id: str
@@ -167,6 +203,10 @@ class QuantumChannel(Component):
     session_id: str | None = None
     delivery_priority: int = 0
 
+    # Appended after the existing fields rather than grouped with the other
+    # physics knobs: this one applies only to the coherent-amplitude path.
+    phase_noise_stddev_rad: float = 0.0
+
     input_port: Port = field(init=False)
     output_port: Port = field(init=False)
 
@@ -176,10 +216,12 @@ class QuantumChannel(Component):
     _received_count: int = field(init=False, default=0)
     _delivered_count: int = field(init=False, default=0)
     _lost_count: int = field(init=False, default=0)
+    _attenuated_count: int = field(init=False, default=0)
 
     _bound_timeline_id: int | None = field(init=False, default=None)
     _loss_rng: DeterministicRNG | None = field(init=False, default=None)
     _timing_rng: DeterministicRNG | None = field(init=False, default=None)
+    _phase_rng: DeterministicRNG | None = field(init=False, default=None)
 
     def __post_init__(self) -> None:
         (
@@ -244,6 +286,12 @@ class QuantumChannel(Component):
             type_name="numeric",
         )
 
+        require_non_negative_real(
+            self.phase_noise_stddev_rad,
+            field_name="phase_noise_stddev_rad",
+            type_name="numeric",
+        )
+
         if self.session_id is not None:
             ensure_nonempty_id(self.session_id, field_name="session_id")
 
@@ -288,8 +336,24 @@ class QuantumChannel(Component):
 
     @property
     def lost_count(self) -> int:
-        """Number of accepted signals lost and discarded by the channel."""
+        """Number of accepted signals lost and discarded by the channel.
+
+        Only qubit carriers are ever counted here. A coherent pulse faces no
+        Bernoulli trial, so ``lost_count == 0`` on an all-amplitude run means
+        "nothing was discarded", **not** "the fibre was lossless" -- see
+        :attr:`attenuated_count`.
+        """
         return self._lost_count
+
+    @property
+    def attenuated_count(self) -> int:
+        """Number of coherent pulses scaled by the fibre's power transmission.
+
+        The amplitude counterpart of :attr:`lost_count`. Loss is invisible in
+        the delivered/received counters on that path, because attenuation is
+        arithmetic rather than a discard.
+        """
+        return self._attenuated_count
 
     @property
     def resolved_delay_ticks(self) -> int:
@@ -345,6 +409,15 @@ class QuantumChannel(Component):
             self.channel_id,
             "quantum_channel",
             "timing",
+        )
+        # Declared unconditionally, and never drawn at the 0.0 default.
+        # ``Timeline.rng`` refuses a new stream once execution begins, and
+        # declaring one perturbs no existing replay: RNGManager seeds each
+        # stream from its path, never from creation order or stream count.
+        self._phase_rng = timeline.rng(
+            self.channel_id,
+            "quantum_channel",
+            "phase",
         )
         self._bound_timeline_id = timeline_id
         timeline.log(
@@ -414,7 +487,42 @@ class QuantumChannel(Component):
         event_id: int | None,
         action: str,
     ) -> None:
-        """Apply channel loss, qstate noise, metadata, and delivery scheduling."""
+        """Apply channel loss, qstate noise, metadata, and delivery scheduling.
+
+        Notes
+        -----
+        The two transport models are split on the **role** a signal's qstate
+        record plays, not on whether it has one. A record whose handle is
+        ``"qubit"`` *is* the carrier and faces the Bernoulli survival trial; a
+        record whose handle is ``"mode"`` merely describes the mode a classical
+        amplitude occupies, and loss scales that amplitude instead. Gating loss
+        on ``state_ref is not None`` would subject a polarization state to
+        probabilistic annihilation and look exactly like an ordinary lossy link.
+        """
+        role = qstate_payload_role(signal)
+
+        if signal.coherent_state is not None:
+            self._transmit_coherent_now(
+                timeline,
+                signal=signal,
+                role=role,
+                event_id=event_id,
+                action=action,
+            )
+            return
+
+        if role == "mode":
+            raise ValueError(
+                "signal carries a mode descriptor with no amplitude occupying "
+                "it; a mode record describes the mode of a coherent_state and "
+                "cannot travel alone"
+            )
+
+        # ------------------------------------------------------------------
+        # Qstate carrier path. Unchanged; every signal in the simulator today
+        # takes it, and it is deliberately not restructured around the branch
+        # above so that its behaviour stays byte-identical.
+        # ------------------------------------------------------------------
         self._received_count += 1
 
         targets = qstate_targets_from_signal(signal)
@@ -518,6 +626,186 @@ class QuantumChannel(Component):
             raise RuntimeError("quantum channel must be bound before execution")
 
         return loss_rng.random() >= self._survival_probability_value
+
+    def _sample_phase_noise_rad(self) -> float:
+        """Sample an optical phase shift in radians for one coherent pulse."""
+        stddev = float(self.phase_noise_stddev_rad)
+        if stddev == 0.0:
+            return 0.0
+
+        phase_rng = self._phase_rng
+        if phase_rng is None:
+            raise RuntimeError("quantum channel must be bound before execution")
+
+        return float(phase_rng.normal(loc=0.0, scale=stddev))
+
+    def _require_coherent_transport_supported(
+        self,
+        *,
+        role: str | None,
+    ) -> None:
+        """Reject configurations this channel cannot honour for an amplitude.
+
+        Notes
+        -----
+        Checked at event time rather than at construction, because a channel
+        cannot know at construction which payloads it will be asked to carry.
+        """
+        if role == "qubit":
+            raise ValueError(
+                "signal carries both a qubit carrier and an optical amplitude; "
+                "the carrier must be one or the other. A qstate record that "
+                "describes the mode of a coherent pulse belongs on a handle "
+                "with kind='mode'"
+            )
+
+        if float(self.timing_jitter_stddev_ticks) > 0.0:
+            raise ValueError(
+                "timing_jitter_stddev_ticks is not supported for "
+                "coherent-amplitude transport: an independent draw per pulse "
+                "makes adjacent-pulse spacing wander and can reorder pulses, "
+                "which a phase-encoded receiver depends on. Set "
+                "timing_jitter_stddev_ticks=0.0 on a channel carrying pulses"
+            )
+
+        if self.noise_models and role is None:
+            raise ValueError(
+                "noise_models cannot act on an optical amplitude alone. A "
+                "noise model is a set of Kraus operators shaped "
+                "(2**arity, 2**arity) for qubit axes; a coherent amplitude is "
+                "one complex number and has no such axis, so there is nothing "
+                "for them to act on and applying them silently would be worse "
+                "than refusing. A fibre configured for single photons "
+                "therefore cannot be reused unchanged for pulses: drop "
+                "noise_models and set phase_noise_stddev_rad instead, which is "
+                "the optical-phase equivalent. Polarization noise on a pulse "
+                "reaches its qstate record through the ordinary noise_models "
+                "path and needs a handle with kind='mode'"
+            )
+
+    def _transmit_coherent_now(
+        self,
+        timeline: Timeline,
+        *,
+        signal: Signal,
+        role: str | None,
+        event_id: int | None,
+        action: str,
+    ) -> None:
+        """Attenuate one coherent pulse and schedule its delivery.
+
+        Notes
+        -----
+        Attenuation is **arithmetic, not a trial**. ``_is_lost`` is never called
+        here and the loss stream is never consumed, so an all-amplitude run
+        replays identically whatever the fibre loss is. A Bernoulli draw on this
+        path would reintroduce exactly the per-slot photon-number sampling the
+        coherent source exists to avoid.
+
+        ``eta`` is one physical property of the fibre with two correct
+        consequences: a survival probability for a single photon, and a power
+        transmission for an amplitude. There is no second loss field.
+
+        Nothing is discarded, so ``lost_count`` stays 0 and
+        ``delivered_count == received_count`` however lossy the fibre is.
+        Reading ``lost_count == 0`` as "lossless" is a trap; total attenuation
+        delivers coherent vacuum on time, and deciding no photon was seen is the
+        detector's job.
+        """
+        self._received_count += 1
+        self._require_coherent_transport_supported(role=role)
+
+        incoming = signal.coherent_state
+        assert incoming is not None
+        power_transmission = self._survival_probability_value
+        state = attenuated(incoming, power_transmission=power_transmission)
+
+        # No jitter: rejected above for this path, so spacing is exactly the
+        # emission spacing and adjacent pulses stay adjacent.
+        duration_ticks = self._resolved_delay_ticks
+        duration_s = ticks_to_seconds(duration_ticks)
+        arrival_time = timeline.current_time + duration_ticks
+
+        phase_noise_rad = self._sample_phase_noise_rad()
+        if phase_noise_rad != 0.0:
+            state = phase_shifted(state, phase_rad=phase_noise_rad)
+
+        if role is not None and self.noise_models:
+            # A "mode" record takes Kraus noise through the same call and the
+            # same operators a qubit carrier does. The only thing this path does
+            # differently is skip the loss trial above.
+            timeline.qstate.apply_noise_models(
+                self.noise_models,
+                targets=qstate_targets_from_signal(signal),
+                duration_s=duration_s,
+            )
+
+        updated_signal = signal._derived(
+            coherent_state=state,
+            meta=signal.meta
+            + (
+                ("quantum_channel_id", self.channel_id),
+                # Not "survival_probability": a pulse that faced no Bernoulli
+                # trial must not carry a record claiming it did.
+                ("channel_power_transmission", power_transmission),
+            ),
+            timing_meta=signal.timing_meta
+            + (
+                ("channel_delay_ticks", self._resolved_delay_ticks),
+                ("channel_timing_jitter_ticks", 0),
+                ("channel_duration_ticks", duration_ticks),
+                ("channel_duration_s", duration_s),
+                ("channel_arrival_time", arrival_time),
+            ),
+        )
+
+        event_meta = {
+            "channel_id": self.channel_id,
+            "signal_id": signal.id,
+        }
+        if self.session_id is not None:
+            event_meta["session_id"] = self.session_id
+
+        output_connection = require_connection(self.output_port)
+        self._attenuated_count += 1
+        timeline.log(
+            LogLevel.DEBUG,
+            # A separate topic from ``signal_forwarded``: the two records carry
+            # different keys, and the qstate one is asserted by exact equality.
+            "components.channels.quantum.pulse_forwarded",
+            "coherent pulse forwarded",
+            event_id=event_id,
+            action=action,
+            meta={
+                "channel_id": self.channel_id,
+                "signal_id": signal.id,
+                "signal_kind": signal.signal_kind.value,
+                "received_index": self._received_count,
+                "connection_id": output_connection.connection_id,
+                "delay_ticks": self._resolved_delay_ticks,
+                "duration_ticks": duration_ticks,
+                "arrival_time": arrival_time,
+                # Loss is invisible in the counters on this path, so it has to
+                # be visible here. Derived floats only -- the JSONL sink has no
+                # complex case and would fall back to repr().
+                "channel_power_transmission": power_transmission,
+                "mean_photon_number_in": incoming.mean_photon_number,
+                "mean_photon_number_out": state.mean_photon_number,
+                "phase_noise_rad": phase_noise_rad,
+                "qstate_payload_role": role,
+            },
+        )
+        output_connection.transmit(
+            updated_signal,
+            timeline,
+            time=arrival_time,
+            priority=self.delivery_priority,
+            source=self,
+            subsystem_id="components",
+            meta=event_meta,
+        )
+
+        self._delivered_count += 1
 
     def _with_channel_metadata(
         self,

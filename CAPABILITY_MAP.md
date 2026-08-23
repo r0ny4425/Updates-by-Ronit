@@ -130,16 +130,43 @@ port-to-port to a terminating component. See section 5 and
 Distance → loss and distance → delay are handled by the channel. Do **not** hand-compute
 attenuation in the agent.
 
-`QuantumChannel` handles exactly one payload kind: a qstate-backed `Signal`. Every
-accepted signal takes the Bernoulli survival path, and
-`qstate_targets_from_signal` (`components/quantum_targets.py`) raises for a signal
-with no `state_ref`. There is no coherent-amplitude path and no
-`phase_noise_stddev_rad`.
+`QuantumChannel` handles **two** payload kinds, chosen by the role of a signal's
+qstate record (`qstate_payload_role` in `components/quantum_targets.py`), never by
+whether it has one:
 
-**Not modeled natively:** coherent-pulse / optical-amplitude transport,
-free-space/atmospheric channels, wavelength-dependent loss, polarization-mode
-dispersion, active channel drift. Approximate with the existing loss +
-noise_models, and say so explicitly in the report.
+| Payload | `role` | Loss | Noise |
+|---|---|---|---|
+| qstate carrier (photon, entangled member) | `"qubit"` | Bernoulli trial at `10**(-L/10)`; discarded on loss | `noise_models` via Kraus |
+| coherent pulse | `None` | `alpha -> sqrt(eta)*alpha`, deterministic, nothing discarded | `noise_models` **rejected** — use `phase_noise_stddev_rad` |
+| polarized coherent pulse | `"mode"` | as above; the record is **not** discarded | `noise_models` via Kraus, on the record |
+
+`eta` is one fibre property with two correct consequences; there is no second loss
+field. On the amplitude path `lost_count` stays **0** and
+`delivered_count == received_count` however lossy the fibre — read
+`attenuated_count` instead, and never read `channel_lost == 0` as "lossless".
+The loss RNG is never consumed there, so an all-amplitude run replays identically
+at any seed.
+
+`phase_noise_stddev_rad` (default `0.0`) applies a per-pulse optical phase shift.
+`timing_jitter_stddev_ticks` must be zero for pulses and `noise_models` must be
+empty unless a `"mode"` record is present; both are rejected at **event** time,
+because a channel cannot know at construction what it will carry. A fibre
+configured for BB84 therefore cannot be reused unchanged for DPS.
+
+Optical arithmetic lives in `components/coherent_optics.py` — `attenuated` and
+`phase_shifted` today; `split_50_50`, `interfere`, `gaussian_temporal_overlap`
+and `click_probability` ship with their first callers.
+
+**Not modeled natively:** free-space/atmospheric channels, wavelength-dependent
+loss, polarization-mode dispersion, active channel drift, optical gain
+(`attenuated` rejects a power transmission above 1), chromatic dispersion and
+pulse broadening (`temporal_mode_sigma_s` is unchanged in flight). **Channel
+phase noise is independent per pulse**, which is pessimistic: real fibre phase
+noise is strongly correlated over a nanosecond slot, so an IID draw gives the
+*differential* phase a variance of `2*sigma**2` and reads a phase-encoded
+protocol's QBER high. Report the discrepancy; never tune `sigma_phi` down to hide
+it. Approximate with the existing loss + noise_models, and say so explicitly in
+the report.
 
 ### 3.3 Modulators and interferometers
 
@@ -335,17 +362,18 @@ Save a JSONL event log when ordering is unclear.
 Not natively modeled. If the spec requires one, report it as a gap and propose either an
 approximation or a new component:
 
-- **Coherent-pulse transport, interference, and detection.** The *transmitter*
-  now exists — `WeakCoherentPulseSource` (§3.1), `CoherentState`, and the
-  `coherent_state` / `temporal_mode_sigma_s` / `polarization` fields on
-  `Signal`. Nothing downstream of it does. There is no optical arithmetic
-  module (`components/coherent_optics.py` is named in docstrings and does not
-  exist), no amplitude path through `QuantumChannel`, no beamsplitter, no
-  interferometer, and no detector that accepts an amplitude-only signal. So
+- **Coherent-pulse interference and detection.** The *transmitter* and
+  *transport* now exist — `WeakCoherentPulseSource` (§3.1), `CoherentState`,
+  `components/coherent_optics.py`, and `QuantumChannel`'s amplitude path
+  (§3.2). The *receiver* does not. There is no beamsplitter, no
+  interferometer, and no detector that accepts an amplitude-only signal:
+  `DetectorArray` measures a qubit carrier and raises on a coherent pulse. So
   DPS, DQPS, COW, decoy-state BB84 and interference visibility remain unbuilt
-  end to end. Report the receiver half as a gap, and note that a coherent
-  source can currently only be wired directly to a terminating component. The
-  design for the rest is `docs/dev/dps-design.md`
+  end to end, and a coherent pulse can currently be wired source → channel →
+  terminating component and no further. `coherent_optics` ships only
+  `attenuated` and `phase_shifted`; `split_50_50`, `interfere`,
+  `gaussian_temporal_overlap` and `click_probability` arrive with their
+  callers. The design for the rest is `docs/dev/dps-design.md`
 - Decoy-state BB84 (photon-number statistics)
 - Free-space / satellite channels, atmospheric turbulence
 - Continuous-variable QKD (repo is discrete-variable)

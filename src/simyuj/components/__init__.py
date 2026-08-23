@@ -45,6 +45,8 @@ from .sources.coherent_preparation import (
     PerPulseRandomCarrierPhase,
     PhaseSelection,
     PhaseSequence,
+    PolarizationSelection,
+    PolarizationSelector,
     RandomPhaseChoice,
 )
 from .sources.reports import CoherentPulsePreparationReport, SourcePreparationReport
@@ -89,6 +91,8 @@ __all__ = [
     "PerPulseRandomCarrierPhase",
     "PhaseSelection",
     "PhaseSequence",
+    "PolarizationSelection",
+    "PolarizationSelector",
     "Port",
     "PortConnection",
     "PortDelivery",

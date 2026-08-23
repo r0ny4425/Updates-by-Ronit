@@ -21,9 +21,11 @@ from simyuj.components.sources.coherent_preparation import (
     PerPulseRandomCarrierPhase,
     PhaseSelection,
     PhaseSequence,
+    PolarizationSelection,
     RandomPhaseChoice,
     validate_pulse_selectors,
 )
+from simyuj.signal import EncodingScheme, Signal, SignalKind
 
 
 class _TripwireRNG:
@@ -213,3 +215,57 @@ def test_validate_pulse_selectors_rejects_a_non_callable_attribute() -> None:
 
     with pytest.raises(TypeError, match="intensity must implement select_intensity"):
         validate_pulse_selectors(**kwargs)
+
+
+# --------------------------------------------------------------------------
+# polarization: the selection record only. No selector ships in src/, so the
+# ones used here and in test_weak_coherent_pulse_source.py are local fixtures,
+# not previews of an alphabet.
+# --------------------------------------------------------------------------
+
+
+def test_polarization_selection_normalizes_its_jones_vector() -> None:
+    # Re-exercises _normalized_polarization, which Signal already covers in
+    # test_signal_coherent_fields.py. What is new is that PolarizationSelection
+    # runs it at all: int/float components are converted, so an alphabet may be
+    # written the readable way.
+    selection = PolarizationSelection(jones=(1.0, 0.0), index=0)
+
+    assert selection.jones == (1 + 0j, 0j)
+    assert all(isinstance(component, complex) for component in selection.jones)
+
+
+def test_polarization_selection_rejects_an_unnormalized_jones_vector() -> None:
+    # This is the whole reason the check lives here. The source builds its
+    # signals with validation_flag=False, so Signal.__post_init__ returns before
+    # reaching its own copy of this check -- a bad vector reaching the emit path
+    # would be accepted in silence.
+    unnormalized = (1.0 + 0j, 1.0 + 0j)
+
+    assert (
+        Signal(
+            id="s",
+            signal_kind=SignalKind.PULSE,
+            encoding_scheme=EncodingScheme.POLARIZATION,
+            emission_time=0,
+            origin="src",
+            polarization=unnormalized,
+            validation_flag=False,
+        ).polarization
+        == unnormalized
+    )
+
+    with pytest.raises(ValueError, match="must be normalized"):
+        PolarizationSelection(jones=unnormalized, index=0)
+
+
+def test_validate_pulse_selectors_treats_polarization_as_optional() -> None:
+    # None is not a missing selector: the other three name a quantity every
+    # pulse has, while a pulse need not occupy a described mode at all.
+    validate_pulse_selectors(**_valid_selector_kwargs(), polarization=None)
+
+    with pytest.raises(
+        TypeError,
+        match="polarization must implement select_polarization",
+    ):
+        validate_pulse_selectors(**_valid_selector_kwargs(), polarization=object())

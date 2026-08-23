@@ -13,6 +13,7 @@ from math import pi
 import pytest
 
 from simyuj.components.connections import connect_ports
+from simyuj.components.quantum_targets import qstate_payload_role
 from simyuj.components.sources import (
     DPS_PHASES,
     CoherentPulsePreparationReport,
@@ -21,6 +22,7 @@ from simyuj.components.sources import (
     FixedPhase,
     PerPulseRandomCarrierPhase,
     PhaseSequence,
+    PolarizationSelection,
     RandomPhaseChoice,
     WeakCoherentPulseSource,
 )
@@ -448,3 +450,112 @@ def test_exhausted_phase_sequence_aborts_the_run_with_a_clear_reason() -> None:
 
     with pytest.raises(RuntimeError, match="phase sequence exhausted"):
         _run(source)
+
+
+# --------------------------------------------------------------------------
+# polarization: the seam, not the feature
+#
+# No polarization selector ships in src/ -- the alphabet, its ordering, and its
+# noise model are a later change. The two selectors below are test fixtures that
+# exercise the seam the source opens; they are deliberately not a preview of
+# what will ship, and nothing here asserts a physical claim about H/V/D/A.
+# --------------------------------------------------------------------------
+
+_H: tuple[complex, complex] = (1 + 0j, 0j)
+_V: tuple[complex, complex] = (0j, 1 + 0j)
+_D: tuple[complex, complex] = (2**-0.5 + 0j, 2**-0.5 + 0j)
+
+
+@dataclass(frozen=True, slots=True)
+class _FixedPolarization:
+    """Test selector holding one mode for the whole run. Consumes no rng."""
+
+    jones: tuple[complex, complex] = _D
+    alphabet_index: int = 0
+
+    def select_polarization(self, index, rng) -> PolarizationSelection:
+        del index, rng
+        return PolarizationSelection(jones=self.jones, index=self.alphabet_index)
+
+
+@dataclass(frozen=True, slots=True)
+class _TwoModeChoice:
+    """Test selector drawing one of two modes per pulse from its own stream."""
+
+    def select_polarization(self, index, rng) -> PolarizationSelection:
+        del index
+        chosen = min(int(float(rng.random()) * 2), 1)
+        return PolarizationSelection(jones=(_H, _V)[chosen], index=chosen)
+
+
+def test_polarization_stream_is_declared_even_with_no_selector() -> None:
+    # The fifth stream is declared unconditionally. Gating it on
+    # `polarization is not None` would mean an unpolarized source has no path to
+    # declare, and Timeline.rng refuses new paths after freeze -- so a selector
+    # could never be added to a source that had already started.
+    source = _make_source()
+    timeline, _sink = _run(source)
+
+    timeline.rng("alice_laser", "weak_coherent_pulse_source", "polarization")
+
+
+def test_a_polarization_selector_prepares_one_mode_record_per_pulse() -> None:
+    source = _make_source(polarization=_FixedPolarization())
+    timeline, sink = _run(source)
+
+    assert source.pulse_count == 5
+    assert timeline.qstate.size() == 5
+
+    for pulse_index, signal in enumerate(sink.signals, start=1):
+        assert signal.state_ref is not None
+        assert len(signal.state_targets) == 1
+
+        handle = signal.state_targets[0]
+        assert handle.label == f"alice_laser:mode:{pulse_index}"
+        # The load-bearing stamp. SubsystemHandle defaults to "qubit", so
+        # omitting it would make the polarization state the propagating carrier
+        # and expose it to the channel's Bernoulli survival trial.
+        assert handle.kind == "mode"
+        assert qstate_payload_role(signal) == "mode"
+
+    # Each pulse owns its own record; nothing is shared or reused.
+    assert len({signal.state_ref for signal in sink.signals}) == 5
+
+
+def test_signal_polarization_stays_none_so_the_qstate_record_is_the_only_copy() -> None:
+    # Signal.polarization and a "mode" qstate record are the same physical
+    # quantity, and only the record survives channel noise -- a depolarized mode
+    # has no Jones vector to write back. Setting both would hand a detector the
+    # prepared state while the arrived state sat in qstate.
+    source = _make_source(polarization=_FixedPolarization(jones=_H))
+    _timeline, sink = _run(source)
+
+    assert all(signal.polarization is None for signal in sink.signals)
+    assert all(signal.state_ref is not None for signal in sink.signals)
+
+
+def test_report_records_the_jones_vector_and_its_alphabet_index() -> None:
+    # The report is the one place the vector is recorded beside the record, and
+    # that is not the same duplication: it is a frozen note of a choice made at
+    # emission time, on the control plane, that nothing downstream updates.
+    source = _make_source(polarization=_FixedPolarization(jones=_H, alphabet_index=3))
+    _run(source)
+
+    assert [report.polarization for report in source.reports] == [_H] * 5
+    assert [report.polarization_index for report in source.reports] == [3] * 5
+
+
+def test_polarization_draws_from_its_own_stream_and_does_not_shift_encoding() -> None:
+    # Same shape as test_intensity_and_encoding_draw_from_independent_streams,
+    # kept because it is the specific claim the fifth stream exists for: sharing
+    # "encoding" would make every polarized pulse consume a draw an unpolarized
+    # run does not, breaking replay of every DPS run recorded before this.
+    def encoding_indices(polarization) -> list[int]:
+        source = _make_source(
+            encoding_phase=RandomPhaseChoice(DPS_PHASES),
+            polarization=polarization,
+        )
+        _run(source, seed=5)
+        return [report.encoding_phase_index for report in source.reports]
+
+    assert encoding_indices(None) == encoding_indices(_TwoModeChoice())

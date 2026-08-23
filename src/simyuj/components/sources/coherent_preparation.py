@@ -9,18 +9,26 @@ builds one amplitude from them,
 
    \\alpha = \\sqrt{\\mu}\\,e^{i(\\Theta + \\varphi_{enc})}
 
+A fourth choice is optional and selects **which polarization mode that amplitude
+occupies**. It is the only one whose value is a quantum state rather than a
+number, which is why :class:`PolarizationSelection` carries a specification and
+the *source*, not the selector, turns it into a qstate record. No concrete
+polarization selector is shipped here: the alphabet, its noise model, and who
+retires the mode record are a later change. The protocol and the record exist so
+that change is additive.
+
 Each choice is made by a small frozen strategy object supplied at construction,
 following ``GateModel`` in ``detectors/primitives/gate.py``: a ``Protocol`` with
 a trivial implementation, a parametric one, and an explicit-sequence one.
 
-Three protocols, not one
-------------------------
+Four protocols, not one
+-----------------------
 
-All three quantities are floats, so a single generic selector protocol would
-type-check ``intensity=RandomPhaseChoice(...)`` and silently produce
+Three of the four quantities are floats, so a single generic selector protocol
+would type-check ``intensity=RandomPhaseChoice(...)`` and silently produce
 :math:`\\mu \\in \\{0, \\pi\\}`. They also have different domains --
 :math:`\\mu` is non-negative, a phase is any finite real -- and different
-validation is different type.
+validation is different type. The fourth is not a float at all.
 
 The carrier and encoding phases are kept apart for a physical reason, not a
 stylistic one. In a differential-phase protocol the bit lives in
@@ -34,13 +42,14 @@ constant.
 Return shapes
 -------------
 
-Intensity and encoding phase return a small frozen record carrying **both the
-value and its position in the alphabet**, because the index is what a protocol
-agent decodes and what the preparation report records. The carrier phase returns
-a bare ``float``: ``PerPulseRandomCarrierPhase`` draws from a continuous
+Intensity, encoding phase, and polarization return a small frozen record carrying
+**both the value and its position in the alphabet**, because the index is what a
+protocol agent decodes and what the preparation report records. The carrier phase
+returns a bare ``float``: ``PerPulseRandomCarrierPhase`` draws from a continuous
 distribution and has no alphabet to index, which is exactly why
-``CoherentPulsePreparationReport`` has ``intensity_index`` and
-``encoding_phase_index`` but no ``carrier_phase_index``.
+``CoherentPulsePreparationReport`` has ``intensity_index``,
+``encoding_phase_index`` and ``polarization_index`` but no
+``carrier_phase_index``.
 
 Purity and the pulse counter
 ----------------------------
@@ -61,6 +70,15 @@ from math import pi
 from typing import TYPE_CHECKING, Protocol
 
 from simyuj.primitives.validation import require_finite_real, require_non_negative_real
+
+# Reached into rather than reimplemented, following ``signal.py``'s own import of
+# ``primitives.ids._require_optional_correlation_id``. A second definition would
+# mean a second normalization tolerance and a second error message for one
+# physical constraint, and the two would drift. This is the *same* check
+# ``Signal.__post_init__`` runs -- which is the point: the source builds its
+# signals with ``validation_flag=False``, so that check never fires on the
+# emission hot path and the selection is where it has to happen instead.
+from simyuj.signal.signal import _normalized_polarization
 
 if TYPE_CHECKING:
     from simyuj.engine.rng_manager import DeterministicRNG
@@ -138,6 +156,53 @@ class PhaseSelection:
     index: int
 
 
+@dataclass(frozen=True, slots=True)
+class PolarizationSelection:
+    """One selected polarization mode and its position in the alphabet.
+
+    Parameters
+    ----------
+    jones : tuple[complex, complex]
+        Jones vector ``(u_H, u_V)`` of the mode this pulse occupies, normalized
+        to ``|u_H|**2 + |u_V|**2 == 1``. ``int`` and ``float`` components are
+        accepted and converted, so ``(1.0, 0.0)`` is a valid horizontal state.
+    index : int
+        Position of that state in the selector's alphabet. This is what the
+        protocol layer decodes; the report records it beside the vector for the
+        same reason ``encoding_phase_rad`` sits beside ``encoding_phase_index``.
+
+    Notes
+    -----
+    **This is a specification, not a record.** ``jones`` is *what to prepare*;
+    the source calls ``timeline.qstate.prepare`` and owns the resulting
+    ``state_ref``. The precedent is ``StateSample`` in ``qstate/sampler.py``,
+    which ``SinglePhotonSource`` consumes exactly this way: the sampler is pure
+    and never touches the timeline. Keeping the selector on the specification
+    side of that seam is what lets one selector instance drive several sources,
+    and it keeps the emit path free of a "descriptor or reference" branch.
+
+    **The vector is validated here because the emit path cannot validate it.**
+    ``Signal.__post_init__`` normalizes ``polarization``, but the source builds
+    its signals with ``validation_flag=False`` and the check is skipped whole.
+    Validating at selection construction costs one call per selector rather than
+    one per pulse, and it fires at the point a caller can act on -- when the
+    alphabet is written, not on the pulse that happens to draw the bad entry.
+
+    There is no ``rep`` field, unlike ``StateSample``. A Jones vector is by
+    construction a pure single-mode state, so ``"ket"`` is the only
+    representation it can name; a field with one legal value documents nothing
+    and invites a caller to set it wrongly. Partially polarized light is not a
+    Jones vector at all -- it arrives as a ``NoiseModel`` on the prepared mode
+    record, which ``QuantumChannel`` already applies through the density path.
+    """
+
+    jones: tuple[complex, complex]
+    index: int
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "jones", _normalized_polarization(self.jones))
+
+
 class IntensitySelector(Protocol):
     """Protocol for per-pulse mean-photon-number selection.
 
@@ -185,6 +250,33 @@ class EncodingPhaseSelector(Protocol):
         index: int,
         rng: DeterministicRNG,
     ) -> PhaseSelection: ...
+
+
+class PolarizationSelector(Protocol):
+    """Protocol for per-pulse polarization-mode selection.
+
+    Notes
+    -----
+    **No implementation of this protocol ships in this module.** The protocol,
+    :class:`PolarizationSelection`, the source's ``polarization`` parameter and
+    its RNG stream exist so that a decoy-BB84 alphabet is one new class here and
+    no change anywhere else. Choosing that alphabet -- H/V/D/A ordering, and the
+    convention a receiving agent decodes ``polarization_index`` against -- is a
+    protocol decision and is deliberately not made here. ``RandomPhaseChoice``'s
+    warning about silently inverted alphabets applies verbatim.
+
+    Returns a :class:`PolarizationSelection`, which is a *specification*: the
+    selector stays pure and never touches ``timeline.qstate``. The source
+    prepares the record and stamps it ``SubsystemHandle(kind="mode")`` so
+    ``qstate_payload_role`` reports ``"mode"`` and channel loss scales the
+    amplitude instead of destroying the state.
+    """
+
+    def select_polarization(
+        self,
+        index: int,
+        rng: DeterministicRNG,
+    ) -> PolarizationSelection: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -463,18 +555,23 @@ def validate_pulse_selectors(
     intensity: object,
     carrier_phase: object,
     encoding_phase: object,
+    polarization: object = None,
 ) -> None:
-    """Validate that three preparation selectors implement their protocols.
+    """Validate that the preparation selectors implement their protocols.
 
     Parameters
     ----------
     intensity, carrier_phase, encoding_phase : object
         Candidate selector objects supplied to a coherent source.
+    polarization : object, default=None
+        Optional candidate polarization selector. ``None`` means no polarization
+        is modelled and is not an error: the other three name a quantity every
+        pulse has, while a pulse need not occupy a described mode at all.
 
     Raises
     ------
     TypeError
-        If any of them does not expose its callable selection method.
+        If any supplied selector does not expose its callable selection method.
 
     Notes
     -----
@@ -489,6 +586,11 @@ def validate_pulse_selectors(
     wrong return type raises ``AttributeError``. Neither is guarded per pulse,
     because only a caller-written selector can reach either and the built-in
     selectors validate their alphabets at construction.
+
+    A polarization selector is the one case where the returned value validates
+    itself: :class:`PolarizationSelection` normalizes its Jones vector in
+    ``__post_init__``, so an unnormalized state raises where the selector
+    constructs the selection, not later inside ``timeline.qstate.prepare``.
     """
     for value, method_name, field_name in (
         (intensity, "select_intensity", "intensity"),
@@ -497,6 +599,13 @@ def validate_pulse_selectors(
     ):
         if not callable(getattr(value, method_name, None)):
             raise TypeError(f"{field_name} must implement {method_name}(index, rng)")
+
+    if polarization is not None and not callable(
+        getattr(polarization, "select_polarization", None)
+    ):
+        raise TypeError(
+            "polarization must implement select_polarization(index, rng)",
+        )
 
 
 __all__ = [
@@ -511,6 +620,8 @@ __all__ = [
     "PerPulseRandomCarrierPhase",
     "PhaseSelection",
     "PhaseSequence",
+    "PolarizationSelection",
+    "PolarizationSelector",
     "RandomPhaseChoice",
     "validate_pulse_selectors",
 ]

@@ -316,10 +316,32 @@ integers; a continuous width belongs to `duration_s`'s family and stays a float.
 **`polarization`** — the Jones vector `u = (u_H, u_V)`, normalized so
 `|u_H|**2 + |u_V|**2 == 1`. Also a mode property, for the same reason as σ, which
 is why it sits beside it on `Signal` and not inside `CoherentState`. It is a
-**descriptor of the occupied mode**, not an independent quantum system: the
-physical field is `(alpha*u_H, alpha*u_V)`, one amplitude times a direction. `None`
-means the signal is unpolarized-by-omission (DPS and COW) and every polarization
-branch is skipped.
+**descriptor of the occupied mode**: the physical field is
+`(alpha*u_H, alpha*u_V)`, one amplitude times a direction. `None` means the
+signal is unpolarized-by-omission (DPS and COW) and every polarization branch is
+skipped.
+
+> **Correction — the representation, not the physics.** This paragraph
+> originally continued "…not an independent quantum system", and used that to
+> justify storing the Jones vector as a bare `tuple[complex, complex]` on
+> `Signal`. The first half is right and survives: polarization *is* a mode
+> descriptor, and two pulses in one polarization mode are two excitations of one
+> mode rather than two systems (§7.1). The conclusion does not follow. A
+> normalized two-component complex vector is a qubit whatever it describes, and
+> it needs a Hilbert-space store — the bare tuple is a second representation of
+> an object `qstate` already models, and it is why §9.1 had to report
+> depolarization as unrepresentable.
+>
+> "Mode descriptor" and "lives in `qstate`" are not in tension. The thing that
+> reconciles them is `SubsystemHandle.kind`: a record stamped `"mode"` is one
+> that *describes* the mode a classical amplitude occupies, as against a
+> `"qubit"` record which *is* the carrier. See S4.
+>
+> **The field itself is not yet changed and this document does not decide it.**
+> `Signal.polarization` shipped as a bare tuple; whether it becomes a qstate
+> reference depends on the record-sharing question in §7.1, which is open. What
+> is decided is that the *channel* must not read `state_ref is not None` as
+> "this record is the carrier", because that forecloses the answer.
 
 Note the resulting split, which is the shape to preserve: **one state field and two
 mode fields.** A fourth optical property, if one ever arrives, is a mode property
@@ -476,32 +498,127 @@ This is what makes every later step additive: after S3, a new `Signal` field is
 carried through the channel with no edit anywhere. Ship it with the S10 test that
 asserts `_SIGNAL_FIELD_NAMES == fields(Signal)`.
 
-### S4 — `components/quantum_targets.py`: a named predicate
+### S4 — `components/quantum_targets.py`: a payload-role discriminator
+
+**Superseded: this was originally a presence check, and a presence check is
+wrong.** The draft read:
 
 ```python
 def has_qstate_payload(signal: Signal) -> bool:
-    """Whether this signal carries a qstate record the caller must operate on."""
     return signal.state_ref is not None
 ```
 
+That conflates two different questions. *Is there a qstate record to operate on?*
+gates **noise**. *Is that record the thing that propagates?* gates **loss**. They
+have the same answer for every signal that exists today, and different answers
+for the decoy-BB84 signal — a coherent pulse carrying an amplitude *and* a
+polarization state. Under the presence check S5's first branch fires for it, so
+the polarization qubit takes Bernoulli survival and `discard` as though it were
+the carrier, while α is separately attenuated. Loss would probabilistically
+annihilate a polarization state instead of scaling an amplitude, and the result
+looks exactly like an ordinary lossy link — which is the quantity a QKD run
+measures.
+
+**Shipped instead:**
+
+```python
+def qstate_payload_role(signal: Signal) -> Literal["qubit", "mode"] | None:
+    """"qubit" -- the record IS the carrier; loss destroys it, noise acts on it.
+    "mode"  -- the record DESCRIBES the mode a classical amplitude occupies;
+               loss scales the amplitude, noise still acts on the record.
+    None    -- no qstate record."""
+    if signal.state_ref is None:
+        return None
+    return _single_state_handle(signal).kind
+```
+
+`SubsystemHandle.kind` already accepts `"qubit"` and `"mode"`
+(`primitives/subsystems.py:53`), validated at construction, and **nothing in
+`src/` read it before this commit**. Both are still true of the arity rule:
+`_single_state_handle` is factored out of `qstate_targets_from_signal`, so the
+one-handle check and its message exist once and both functions share them.
+
+**Why this can land before the representation is decided.** All three
+`SubsystemHandle` constructions in `src/` already stamp `kind="qubit"`
+explicitly — `memories/quantum_memory.py:1482`,
+`sources/entangled_pair_source.py:607`, `sources/single_photon_source.py:435` —
+and the field *defaults* to `"qubit"`. So for every signal in the simulator today
+`role == "qubit"` is extensionally identical to `state_ref is not None`, the
+`"mode"` branches are unreachable, and a channel written against either predicate
+behaves the same. The default failing safe toward `"qubit"` is deliberate:
+forgetting to stamp a role gives today's behaviour, never a silently unprotected
+record.
+
+**`qstate_targets_from_signal` does not change.** It resolves identity, never
+role, and a mode record needs its `SubsystemId` resolved just as a carrier does
+so that noise can reach it. Its signature, error messages, and
+`"qstate_subsystem"` metadata precedence are untouched.
+
+**The one-handle rule is load-bearing.** The role is read from the single handle
+in `state_targets`, so a signal carrying both a carrier qubit *and* a mode
+descriptor would need two handles and have no single role. Nothing constructs one
+and nothing is planned to; stated here and in the function's docstring so it is a
+known constraint rather than a discovered one.
+
 Four call sites of `qstate_targets_from_signal` exist (1.5). Only
-`channels/quantum.py` gates on the predicate in this commit; the other three keep
-their current unconditional behaviour, which stays correct because nothing routes
-an amplitude signal to them. A named predicate rather than an inline
-`is not None` so the four sites read alike when the others do need it.
+`channels/quantum.py` gates on the role in step 2; the other three keep their
+current unconditional behaviour, which stays correct because nothing routes an
+amplitude signal to them. **One of the three is a hazard and is written up
+separately — see the `DetectorArray` note under S5.**
 
 ### S5 — `components/channels/quantum.py`: branch on payload
 
 The one substantial behavioural change in the commit. Restructure `_transmit_now`
 so the three effects are independent branches over one signal, not a type switch:
 
+```python
+role  = qstate_payload_role(signal)          # None | "qubit" | "mode"
+state = signal.coherent_state                # None | CoherentState
+
+# reject shapes this channel cannot honour, at event time
+if role == "qubit" and state is not None:
+    raise ValueError("carrier must be a qubit record or an amplitude, not both")
+if role == "mode" and state is None:
+    raise ValueError("mode descriptor with no amplitude occupying it")
+if state is not None:
+    self._require_coherent_transport_supported(signal)   # jitter, ...
+
+# 1. loss -- only a carrier record faces the Bernoulli trial
+if role == "qubit":
+    if self._is_lost():
+        discard(targets); return                     # exactly as today
+elif state is not None:
+    state = attenuated(state, eta)                   # alpha -> sqrt(eta)*alpha
+    self._attenuated_count += 1                      # the mode record is untouched
+
+# 2. timing -- unchanged
+
+# 3. noise -- ANY record takes noise, both roles, identical call
+if role is not None and self.noise_models:
+    timeline.qstate.apply_noise_models(self.noise_models, targets, duration_s)
+
+# 4. optional amplitude phase noise, then metadata and transmit
 ```
-if has_qstate_payload(signal):      Bernoulli survival; discard on loss;
-                                    apply_noise_models; jitter -- exactly as today
-if signal.coherent_state is not None: alpha -> sqrt(eta)*alpha, deterministic
-                                    optional alpha -> alpha * exp(i * delta_phi)
-if signal.polarization is not None: polarization noise   [field now, branch later]
-```
+
+The rejection of a signal carrying both is **kept, with its reason corrected**.
+The original justification was that a qubit record beside an amplitude asserts a
+relationship nothing defines. Under the role that is only true when the record is
+a *carrier*; a `"mode"` record beside an amplitude is exactly the decoy-BB84
+signal and is accepted. The rule is now "the carrier must be one thing or the
+other", which is narrower and does not foreclose step 7.
+
+**A polarized coherent pulse, once one exists** (`role == "mode"`, amplitude
+present, `noise_models=(depolarizing(p),)`): no Bernoulli trial and the loss RNG
+never consumed; α scales by √η so μ scales by η; the Jones record is **not**
+discarded; depolarizing is applied to it through the existing Kraus path;
+`lost_count` unchanged and `attenuated_count` incremented.
+
+**Kraus reuse — nothing new is needed.** `apply_noise_models` is target-agnostic,
+and BB84 already wires `depolarizing_probability` into this exact call
+(`examples/bb84/configs.py:45` → `trial.py:139` → `channels/quantum.py:446`) on
+the identical 2×2 object. **The only thing the channel does differently for a
+mode record is skip the loss trial.** This closes §9.1's depolarization gap as a
+side effect; see the correction there.
 
 New config fields on `QuantumChannel`, both defaulting to `0.0`:
 `phase_noise_stddev_rad`, `polarization_rotation_stddev_rad`.
@@ -554,6 +671,64 @@ A signal carrying **both** `state_ref` and `coherent_state` is also rejected. Th
 structure would happily process both, but nothing in this design constructs such a
 signal, and accepting one means silently asserting a physical relationship between
 a qubit record and a field amplitude that no part of the codebase defines.
+
+> ### ⚠ The `DetectorArray` hazard — required guard, must not be forgotten
+>
+> **The role discriminator converts a loud failure into a silent wrong answer at
+> `detectors/detector_array.py:395`, and the wrong answer is precisely the model
+> §8 exists to rule out.**
+>
+> Today a coherent pulse routed to a `DetectorArray` raises
+> `ValueError("quantum signal must carry state_ref")` at that line — clear, early,
+> unmissable. A *polarized* coherent pulse **has** a `state_ref`, so it sails past
+> that check, and `DetectorArray` measures the Jones qubit as though it were the
+> carrier and routes the whole pulse to one detector by the outcome. That is the
+> single-photon model §8 names as wrong: it cannot produce a double click at all,
+> it makes the double-click rate identically zero at every μ, and it silently
+> assumes one photon per pulse — the assumption decoy BB84 exists to remove. The
+> run would complete and the numbers would look reasonable.
+>
+> **Required guard**, in `_handle_detect_signal` before line 395:
+>
+> ```python
+> if qstate_payload_role(signal) != "qubit":
+>     raise ValueError(
+>         "DetectorArray measures a qubit carrier; a signal whose qstate record "
+>         "describes an optical mode belongs to OpticalDetectorArray"
+>     )
+> ```
+>
+> **It must land before step 7, or alongside `OpticalDetectorArray` in step 5 —
+> whichever comes first.** It is not needed in step 2, because nothing can
+> construct a `"mode"` handle until the source is opened, and adding it in step 2
+> would change a component this commit is meant to leave byte-identical.
+>
+> `bell_analyzer.py:711` and `memories/quantum_memory.py:1532` have the same
+> failure shape and a much lower risk — nothing routes optical pulses to a Bell
+> analyzer or a memory, and nothing is planned to. The same one-line guard when
+> convenient; not scheduled.
+>
+> ### Mode-record lifetime, and the sharing question
+>
+> **Nobody discards a mode record.** The channel deliberately does not — that is
+> the whole point of the role. `OpticalDetectorArray` should, on consumption, and
+> does not exist. Until it does, a long polarized run leaks one live record per
+> pulse. §7.1 measured retained memory as bounded by *live* records rather than
+> cumulative ones, so this is a real leak, not a bookkeeping artefact.
+>
+> **A shared record dies with its first consumer.** The obvious fix — prepare each
+> alphabet element once and have every pulse reference it — does not work against
+> the store as it stands. `QuantumStateManager.discard` (`qstate/manager.py:865`)
+> deletes the reference when its last subsystem goes, so the first consumer to
+> discard destroys the record for every other pulse holding it. Within the channel
+> this is safe under the role; a detector consuming a polarized pulse is where it
+> breaks.
+>
+> Consequence, stated plainly so it is not rediscovered: **always-prepare costs
+> ~14.7 µs per pulse (§7.1) and caps polarized runs at roughly 1e6 pulses.** That
+> covers every tutorial, every test, and the 30 000-slot BB84 example. A refcount
+> or a copy-on-discard rule in the store would lift the cap; neither exists, and
+> the question is cheap to answer whenever it becomes the constraint.
 
 New counters alongside `received_count` / `delivered_count` / `lost_count`:
 `attenuated_count` for the amplitude branch, and log `mean_photon_number_in` and
@@ -1170,6 +1345,42 @@ phase `pi`.
 polarization choice, DQPS 4-phase encoding, COW sequence policies. Each is one new
 class in `weak_coherent_pulse_source.py`.
 
+### 5.6 `PolarizationSelection` — decided, so it is not relitigated
+
+When the source is opened for a fourth axis, the polarization selector returns a
+**specification, and the source always prepares.** There is no union, and no
+"descriptor or reference" branch in the emit path.
+
+```
+selector (pure, no timeline)  ->  PolarizationSelection(state, rep, index)
+source                        ->  timeline.qstate.prepare(...)  ->  state_ref
+                              ->  SubsystemHandle(..., kind="mode")
+```
+
+**The precedent is in this repo and it is the nearest one.**
+`SinglePhotonSource._emit_now` already does exactly this: `StateSampler` is pure
+and never touches the timeline, `sample.state` / `sample.rep` are a specification
+of *what to prepare*, and the source turns that into a record with
+`timeline.qstate.prepare(...)`. `PolarizationSelection` is the same shape as
+`StateSample`, plus the alphabet index the report needs.
+
+**Why not a union.** Carrying "either a descriptor or a state to prepare" and
+branching in `_emit_now` pushes an *undecided* representation onto the hot path,
+and worse, it makes the source know **both** representations permanently in order
+to serve a decision that gets made once. The seam that keeps the source ignorant
+is "specification vs record", not "descriptor vs reference" — and that seam
+preserves selector purity, which is what lets one selector drive several sources.
+
+**What it costs, stated honestly.** One `if self.polarization is not None:` in
+`_emit_now` — the same shape as `if self.noise_models:` in `SinglePhotonSource` —
+and ~14.7 µs per pulse for the `prepare`, capping polarized runs at roughly 1e6
+pulses until the store can share records (§7.1). Every tutorial, every test, and
+the 30 000-slot BB84 example sit comfortably inside that.
+
+**Not decided here, and not blocking:** the H/V/D/A alphabet, any concrete
+selector, who discards a mode record, and whether `Signal.polarization` (the bare
+tuple) is retired once records carry the state. None of them block S4 or step 2.
+
 ---
 
 ## 6. Build order
@@ -1457,11 +1668,34 @@ validation, and two dict mutations, against 0.29 us for the arithmetic that woul
 replace it. That is a **~50x** ratio, before any of the event scheduling, channel,
 and detector work that dominates the rest of the loop.
 
-So the answer is not "qstate is slow". It is that a per-pulse qstate record buys
-nothing here. Polarization on a WCP is a **mode descriptor**, not an independent
-quantum system: two pulses in the same polarization mode are not two entangled or
-even two distinguishable systems, they are two excitations of one mode. Storing a
-qubit per pulse would model a physical claim that is false.
+So the answer is not "qstate is slow". Polarization on a WCP is a **mode
+descriptor**: two pulses in the same polarization mode are not two entangled or
+even two distinguishable systems, they are two excitations of one mode.
+
+> **Correction — the physics stands, the conclusion drawn from it does not.**
+> This section originally continued "…not an independent quantum system. Storing
+> a qubit per pulse would model a physical claim that is false", and used that to
+> place the Jones vector on `Signal` as a bare tuple. Being a mode descriptor is
+> a statement about *what the object describes*, not about *where it is kept*. A
+> normalized two-component complex vector is a qubit either way and needs a
+> Hilbert-space store; `SubsystemHandle.kind="mode"` is what records the
+> descriptor status without pretending the object is not a qubit (S4).
+>
+> **The 50× measurement is real but does not settle the question, because it
+> assumes one record per pulse.** A decoy-BB84 polarization alphabet is four
+> states. Four records prepared once, with each pulse referencing one, costs ~0
+> per pulse — and that option was never considered here.
+>
+> **It does not currently work, and this is the open question.**
+> `QuantumStateManager.discard` (`qstate/manager.py:865`) deletes a reference
+> when its last subsystem goes, so the first consumer to discard destroys a
+> shared record for every other pulse holding it. Read-only sharing needs a
+> refcount or a copy-on-discard rule and has neither.
+>
+> So the honest position is: **always-prepare, at ~14.7 µs per pulse, capping
+> polarized runs at roughly 1e6 pulses** — which covers every tutorial, every
+> test, and the 30 000-slot BB84 example. The cap lifts if the store learns to
+> share. See the lifetime note under S5.
 
 **The alternative is the one already decided: the Jones vector on `Signal`,** with
 `polarization_weights()` in `coherent_optics.py` as the single accessor (section 4). Its
@@ -1559,15 +1793,27 @@ Two further notes for that step:
 
 Explained, not worked around.
 
-**9.1 A Jones vector cannot represent depolarization.** `rotated_polarization` is
-unitary, so channel polarization drift keeps the state pure and the model is
-exact. Actual depolarization — the thing that raises QBER in a real polarization
-link — needs a 2x2 density matrix, and the existing Kraus machinery in `qstate/`
-is shaped `(2**arity, 2**arity)` for qubit *axes* and has no hook for a mode
-descriptor. There is no clean home for it in this design. The honest V1 position:
-model polarization drift, do not model depolarization, and say so in the run
-report. `polarization_weights()` exists precisely so that the day a density matrix
-arrives, one function changes and the PBS does not.
+**9.1 A *bare* Jones vector cannot represent depolarization — and that is a
+property of the representation, not of the physics.** `rotated_polarization` is
+unitary, so channel polarization drift keeps a bare Jones vector pure and the
+model is exact. Actual depolarization — the thing that raises QBER in a real
+polarization link — needs a 2x2 density matrix.
+
+> **This gap closes under S4's discriminator, as a side effect.** The original
+> text said the Kraus machinery "is shaped `(2**arity, 2**arity)` for qubit
+> *axes* and has no hook for a mode descriptor", and concluded there was no clean
+> home. That followed from storing the Jones vector as a bare tuple outside
+> `qstate`. A record stamped `kind="mode"` is an ordinary 2-dimensional axis to
+> the store, so `apply_noise_models` reaches it with no new code — the same call,
+> the same operators, the same `duration_s` that BB84 already uses to depolarize
+> the identical 2×2 object (`examples/bb84/trial.py:139` →
+> `channels/quantum.py:446`). The channel's *only* difference for a mode record
+> is that it skips the loss trial.
+>
+> So V1's position is no longer "drift yes, depolarization never" but
+> "depolarization is available the moment polarization lands, through the knob
+> that already exists". `polarization_weights()` still earns its place as the
+> single accessor, for the reason it always did.
 
 **9.2 `SinglePhotonDetector`'s dead-time model is coarse at GHz.**
 `evaluate_window` blocks the *entire* arrival window if `time < dead_until` — a

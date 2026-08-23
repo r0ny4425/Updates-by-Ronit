@@ -95,3 +95,46 @@ __all__ = [
     "dps_slot_period_ticks",
     "dps_source_duration_s",
 ]
+
+
+def dps_optical_differential_bits(
+    reports: Sequence[object],
+) -> tuple[int, ...]:
+    """Decode the differential bits from interferometer outputs.
+
+    Parameters
+    ----------
+    reports : sequence of InterferenceReport
+        Every combination the delay interferometer produced, in order.
+
+    Returns
+    -------
+    tuple[int, ...]
+        One bit per combination that paired two real pulses. An ``n`` pulse
+        train gives ``n + 1`` combinations and ``n - 1`` bits: the first and
+        last pair a real arm with vacuum and carry no bit, which is what the
+        ``None`` pulse indices on those reports mean.
+
+    Notes
+    -----
+    **This is the optical readout, not Alice's record.** ``dps_differential_bit``
+    decodes what Alice *prepared*, from alphabet indices on the control plane;
+    this decodes what Bob's interferometer *produced*, from which output port is
+    bright. The two agreeing is the statement the receiver optics exist to make,
+    so they are computed by different routes on purpose and must not be merged.
+
+    Equal phases put the light on port 1 and give bit ``0``; a ``pi`` step puts
+    it on port 0 and gives bit ``1``, matching ``index_prev ^ index_curr``
+    against ``DPS_ENCODING_PHASES``.
+
+    The comparison is ``mu_0 > mu_1`` rather than a threshold. An ideal
+    interferometer at full overlap puts a dark port at the floating-point floor,
+    but neither ``0.0`` nor any particular small number is guaranteed, and a
+    real one would not be dark at all -- deciding a click is the detector's job
+    and it does not exist yet.
+    """
+    return tuple(
+        int(report.mean_photon_number_0 > report.mean_photon_number_1)
+        for report in reports
+        if report.short_pulse_index is not None and report.long_pulse_index is not None
+    )

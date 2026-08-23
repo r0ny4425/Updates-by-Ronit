@@ -13,6 +13,19 @@ SUMMARY_KEYS = (
     "preparation_reports",
     "qstate_records",
     "differential_bits",
+    "interference_slots",
+    "optical_differential_bits",
+    "optical_bits_match_alice",
+    "interferometer_mu_in",
+    "interferometer_mu_out",
+    "temporal_overlap_min",
+    "held_arms_at_end",
+    "channel_delay_ticks",
+    "channel_power_transmission",
+    "channel_received",
+    "channel_delivered",
+    "channel_lost",
+    "channel_phase_noise_rad",
     "mean_photon_number_min",
     "mean_photon_number_max",
     "encoding_phase_histogram",
@@ -25,8 +38,10 @@ SUMMARY_KEYS = (
 _RECORD_KEYS = (
     "encoding_phase_indices",
     "alice_differential_bits",
+    "bob_optical_differential_bits",
     "arrival_ticks",
     "reports",
+    "interference_reports",
 )
 
 UNMODELLED_PHYSICS = (
@@ -36,9 +51,17 @@ UNMODELLED_PHYSICS = (
     "modulator dynamics. Preparation is ideal.",
     "Chirp, dispersion, and pulse broadening. temporal_mode_sigma_s is fixed "
     "per source and nothing widens it.",
-    "Transport, interference, and detection. There is no amplitude path "
-    "through QuantumChannel, no interferometer, and no optical detector yet, "
-    "so this trial ends at a tap rather than at a receiver.",
+    "Channel realism. The fibre is a delay plus an optional uniform "
+    "attenuation and an optional per-pulse phase noise, and both are off by "
+    "default. Chromatic dispersion, polarization drift, correlated phase "
+    "drift and any wavelength dependence are absent.",
+    "Detection. There is no optical detector, so both interferometer output "
+    "ports end at a tap. Bob's bits here are read from the interferometer's "
+    "own intensities, not from clicks; no photon-number statistics, detector "
+    "efficiency, dark counts or double clicks enter anywhere.",
+    "Interferometer non-idealities. It is ideal by specification: no "
+    "insertion loss, no arm imbalance, no splitting-ratio error, and no "
+    "thermal or mechanical drift of the arm lengths.",
 )
 
 

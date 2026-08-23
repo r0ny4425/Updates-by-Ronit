@@ -23,6 +23,13 @@ from .connections import (
     default_connection_id,
     require_connection,
 )
+from .interferometers.delay_interferometer import (
+    ACTION_FLUSH_DELAY_ARM,
+    ACTION_INTERFERE,
+    ACTION_RESOLVE_BS2,
+    DelayInterferometer,
+    InterferenceReport,
+)
 from .memories import (
     MEMORY_ABSORB,
     MEMORY_APPLY_OPERATOR,
@@ -62,6 +69,11 @@ from .sources.single_photon_source import (
 from .sources.weak_coherent_pulse_source import WeakCoherentPulseSource
 
 __all__ = [
+    "ACTION_FLUSH_DELAY_ARM",
+    "ACTION_INTERFERE",
+    "ACTION_RESOLVE_BS2",
+    "DelayInterferometer",
+    "InterferenceReport",
     "ACTION_EMIT",
     "ACTION_RECEIVE_CLASSICAL",
     "ACTION_START",

@@ -55,3 +55,54 @@ class DPSAliceSourceConfig:
     # exactly zero. This also means infinite laser coherence length; finite
     # linewidth is not modelled. See the run report.
     carrier_phase_rad: float = 0.0
+
+
+@dataclass(frozen=True)
+class DPSReceiverConfig:
+    """Settings for Bob's delay interferometer.
+
+    There is deliberately **no** ``delay_ticks`` field. The long-arm delay must
+    equal the pulse period, and the pulse period is already fixed by
+    ``DPSAliceSourceConfig.clock_hz``; a second copy here could drift from it,
+    and the interferometer does not validate one against the other -- it cannot,
+    since it never sees the clock. ``trial.py`` derives tau from the same
+    ``clock_hz`` through ``dps_slot_period_ticks``, which is the same
+    define-the-constant-once discipline as ``DPS_ENCODING_PHASES`` above.
+    """
+
+    device_id: str = "bob_interferometer"
+
+
+@dataclass(frozen=True)
+class DPSChannelConfig:
+    """Settings for the fibre between Alice and Bob.
+
+    **Lossless and phase-noise free by default**, so a default run isolates the
+    wiring: the only effect of the channel is a uniform delay. Every pulse is
+    shifted by the same number of ticks, so the spacing at BS2 is unchanged,
+    the temporal overlap stays 1, and the bright-port pattern is identical to a
+    run with no channel at all. Only the arrival ticks move.
+
+    That is a deliberately unphysical default for a 10 km fibre, and it is the
+    right one here: an example whose default run already loses light cannot tell
+    a wiring mistake from an attenuation. ``demo.py`` exposes both knobs so the
+    physics can be switched on explicitly.
+    """
+
+    channel_id: str = "alice_to_bob"
+
+    # 10 km of standard fibre. At the repository's default propagation speed of
+    # 2e8 m/s this is a 50 us delay, which is 5e7 ticks -- far longer than the
+    # whole pulse train, and harmless: the train arrives intact, just later.
+    length_m: float = 10_000.0
+
+    # Real standard fibre at 1550 nm is about 0.2 dB/km. Zero here on purpose;
+    # see the class docstring. On the coherent path this is a *power*
+    # transmission applied deterministically -- alpha -> sqrt(eta) * alpha --
+    # with no Bernoulli trial and no RNG consumed.
+    attenuation_db_per_km: float = 0.0
+
+    # Per-pulse optical phase noise. Zero here on purpose. Non-zero destroys
+    # differential-phase encoding: the differential phase picks up
+    # theta_n - theta_{n-1}, which is independent noise, so the bit is lost.
+    phase_noise_stddev_rad: float = 0.0

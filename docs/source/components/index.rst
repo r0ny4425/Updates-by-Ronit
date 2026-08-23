@@ -74,5 +74,6 @@ Module Pages
    Coherent Optics <coherent_optics>
    Channels <channels>
    Sources <sources>
+   Interferometers <interferometers>
    Detectors <detectors>
    Memories <memories>

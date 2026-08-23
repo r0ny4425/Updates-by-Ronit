@@ -38,8 +38,15 @@ def test_trial_emits_one_pulse_per_slot_and_decodes_every_adjacent_pair() -> Non
     assert trial["qstate_records"] == 0
     assert trial["differential_bits"] == SLOTS - 1
 
+    # Arrival is emission plus the channel delay, uniformly: the fibre shifts
+    # the whole train and preserves its spacing, which is why the interference
+    # pattern below is unchanged by inserting it.
     period = trial["slot_period_ticks"]
-    assert trial["arrival_ticks"] == tuple(index * period for index in range(SLOTS))
+    delay = trial["channel_delay_ticks"]
+    assert delay > 0
+    assert trial["arrival_ticks"] == tuple(
+        index * period + delay for index in range(SLOTS)
+    )
 
     # The report -> decoder join: indices are lifted from the reports, and the
     # bits are derived from those same indices.
@@ -117,3 +124,124 @@ def test_log_file_is_written_without_changing_the_run(tmp_path) -> None:
     assert log_path.stat().st_size > 0
     assert traced["encoding_phase_indices"] == untraced["encoding_phase_indices"]
     assert traced["arrival_ticks"] == untraced["arrival_ticks"]
+
+
+def test_the_receiver_optics_reproduce_alices_bits_and_conserve_energy() -> None:
+    # The claim the interferometer was wired in to make. Alice's bits come from
+    # encoding_phase_index on the control plane; Bob's come from which output
+    # port is bright. Two routes, no shared step, and they must agree.
+    trial = run_dps_transmitter_trial(num_slots=SLOTS)
+
+    assert trial["bob_optical_differential_bits"] == trial["alice_differential_bits"]
+    assert trial["optical_bits_match_alice"] is True
+    assert trial["optical_differential_bits"] == SLOTS - 1
+
+    # N pulses give N+1 output slots: the first pulse's short arm and the last
+    # pulse's long arm each meet vacuum and carry no bit. Getting this wrong is
+    # how a decoder ends up one bit out of step with the key.
+    assert trial["interference_slots"] == SLOTS + 1
+    assert len(trial["interference_reports"]) == SLOTS + 1
+
+    # Ideal device: nothing held at the end, nothing lost, and tau matches the
+    # slot period so every pair overlaps fully.
+    assert trial["held_arms_at_end"] == 0
+    assert trial["interferometer_mu_out"] == pytest.approx(
+        trial["interferometer_mu_in"],
+        abs=1e-12,
+    )
+    # Energy ledger across the whole train: 1/2 mu + (N-1) mu + 1/2 mu.
+    assert trial["interferometer_mu_in"] == pytest.approx(
+        SLOTS * trial["mean_photon_number_max"],
+        abs=1e-12,
+    )
+    assert trial["temporal_overlap_min"] == pytest.approx(1.0, abs=1e-12)
+
+
+def test_the_lossless_channel_only_delays_the_train() -> None:
+    # The channel's coherent path has no other end-to-end exercise until the
+    # detectors arrive, so this is what would catch a wiring mistake. Configured
+    # lossless, its whole effect must be a uniform shift.
+    trial = run_dps_transmitter_trial(num_slots=SLOTS)
+
+    assert trial["channel_power_transmission"] == 1.0
+    assert trial["channel_received"] == SLOTS
+    assert trial["channel_delivered"] == SLOTS
+    assert trial["channel_lost"] == 0
+
+    # Spacing preserved, so every pair still overlaps fully and the bits are
+    # exactly what a run with no channel would give.
+    assert trial["temporal_overlap_min"] == pytest.approx(1.0, abs=1e-12)
+    assert trial["optical_bits_match_alice"] is True
+    assert trial["interferometer_mu_in"] == pytest.approx(
+        SLOTS * trial["mean_photon_number_max"],
+        abs=1e-12,
+    )
+
+
+def test_attenuation_scales_both_arms_equally_so_the_bits_survive() -> None:
+    # An amplitude is never discarded on this path: eta is a power transmission
+    # applied deterministically, so lost_count stays 0 however dark the fibre
+    # is. Reading lost_count == 0 as "lossless" is the trap.
+    lossless = run_dps_transmitter_trial(num_slots=SLOTS)
+    lossy = run_dps_transmitter_trial(
+        num_slots=SLOTS,
+        channel_attenuation_db_per_km=0.2,
+    )
+
+    eta = lossy["channel_power_transmission"]
+    assert eta == pytest.approx(10 ** (-0.2), abs=1e-12)
+    assert lossy["interferometer_mu_in"] == pytest.approx(
+        eta * lossless["interferometer_mu_in"],
+        abs=1e-12,
+    )
+    assert lossy["channel_lost"] == 0
+    assert lossy["channel_delivered"] == lossy["channel_received"] == SLOTS
+
+    # The point: both interferometer arms are split from the same attenuated
+    # pulse, so the interference term and the intensities scale together and
+    # which port is bright never changes. Loss costs signal, not key.
+    assert lossy["optical_bits_match_alice"] is True
+
+    # Deterministic attenuation consumes no RNG, so a lossy run replays
+    # identically at any seed -- the channel's own claim, checked here because
+    # this is the only place it runs end to end.
+    other_seed = run_dps_transmitter_trial(
+        num_slots=SLOTS,
+        master_seed=99_991,
+        channel_attenuation_db_per_km=0.2,
+    )
+    assert other_seed["interferometer_mu_in"] == lossy["interferometer_mu_in"]
+
+
+def test_phase_noise_degrades_the_bit_agreement() -> None:
+    # The first place in this build where a physical imperfection becomes a key
+    # error rather than a number. The differential phase picks up
+    # theta_n - theta_{n-1} from two independent draws, which is exactly what
+    # randomize_carrier_phase does at the source -- here it comes from the
+    # fibre instead.
+    def agreement(sigma_rad: float, seed: int) -> float:
+        trial = run_dps_transmitter_trial(
+            num_slots=SLOTS,
+            master_seed=seed,
+            channel_phase_noise_rad=sigma_rad,
+        )
+        alice = trial["alice_differential_bits"]
+        bob = trial["bob_optical_differential_bits"]
+        assert len(alice) == len(bob) == SLOTS - 1
+        return sum(a == b for a, b in zip(alice, bob)) / len(alice)
+
+    seeds = range(1, 21)
+
+    # At 1 rad the encoding is measurably broken on every seed.
+    heavy = [agreement(1.0, seed) for seed in seeds]
+    assert max(heavy) < 1.0
+    assert sum(heavy) / len(heavy) < 0.95
+
+    # At 0.2 rad it is not broken at all, on any seed, and that is a real
+    # property rather than a weak threshold: Bob's bit here is `mu_0 > mu_1`,
+    # a noiseless threshold at the midpoint, so a differential phase error only
+    # flips a bit once it exceeds pi/2. Visibility degrades continuously long
+    # before the bit does. A detector would smear this -- there isn't one yet,
+    # which is precisely what makes the distinction worth pinning.
+    light = [agreement(0.2, seed) for seed in seeds]
+    assert min(light) == 1.0

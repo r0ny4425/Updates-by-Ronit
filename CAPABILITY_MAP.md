@@ -113,11 +113,11 @@ Decoy intensity levels are one new selector class in
 `sources/coherent_preparation.py` and no other change; the surrounding
 photon-number analysis is protocol-level and belongs in the agent.
 
-**The coherent pulse has no transport yet.** `QuantumChannel` still calls
-`qstate_targets_from_signal` unconditionally and rejects a signal with no
-`state_ref`, so a `WeakCoherentPulseSource` can currently only be wired
-port-to-port to a terminating component. See section 5 and
-`docs/dev/dps-design.md`.
+**The coherent pulse has transport and receiver optics, but no detector.**
+`QuantumChannel` branches on the payload role and carries an amplitude
+deterministically (§3.2), and `DelayInterferometer` recombines adjacent pulses
+(§3.3). What a `WeakCoherentPulseSource` still cannot be wired to is anything
+that turns light into a click. See section 5 and `docs/dev/dps-design.md`.
 
 ### 3.2 Channels
 
@@ -170,20 +170,39 @@ the report.
 
 ### 3.3 Modulators and interferometers
 
-**Neither exists.** There is no `simyuj.components.modulators` package, no
-`simyuj.components.interferometers` package, no `PhaseModulator`, and no
-`DelayInterferometer`. There is also no beamsplitter arithmetic anywhere in
-`src/` and no pulse-envelope field on `Signal`.
+| Spec says | Module | Parameters |
+|---|---|---|
+| delay-line / unbalanced Mach-Zehnder interferometer, DPS receiver optics | `DelayInterferometer` in `simyuj.components.interferometers` | `delay_s` **or** `delay_ticks` (exactly one), `flush_priority` |
+| 50:50 beamsplitter, interference, pulse-envelope overlap | `components/coherent_optics.py` | `split_50_50`, `interfere`, `gaussian_temporal_overlap` |
 
-A phase-encoded protocol (DPS, DQPS, COW) therefore has no receiver in this
-repo today. Report it as a gap. The design for building one is
-`docs/dev/dps-design.md`; do not infer an API from this section.
+`DelayInterferometer` has one quantum ingress port, **two** quantum egress ports
+(`out_0`, `out_1`, both of which must be connected), and a classical `report`
+port carrying `InterferenceReport`. It is ideal by specification and declares no
+RNG streams.
 
-**No phase modulator is planned, and its absence is not the gap.**
-`WeakCoherentPulseSource` (§3.1) chooses the encoding phase itself, so a
-separate modulator would add an event hop and a report describing a phase the
-source already knows. The missing receiver is the interferometer and an optical
-detector, not a modulator.
+Read these before wiring one:
+
+- An **N-pulse train gives N+1 output slots**. The first pulse's short arm and
+  the last pulse's long arm each meet vacuum and carry no bit.
+- **Nearest-neighbour pairing only**, so `tau` approximately equal to the pulse
+  period is the supported regime. `tau = 2T` is a gap, not a configuration.
+- The run must reach `last_arrival + 2*tau + 1`, or the final slots never
+  execute. `Timeline.run_until_empty()` does this.
+- It never validates `tau` against the pulse period — it cannot, it never sees
+  the clock. A mismatch appears as `temporal_overlap` collapsing on every slot.
+
+**No phase modulator exists and none is planned; that is not the gap.**
+`WeakCoherentPulseSource` (§3.1) chooses the encoding phase itself, so a separate
+modulator would add an event hop and a report describing a phase the source
+already knows. The receiver piece still missing is the **optical detector**, not
+a modulator — see §5.
+
+`examples/dps/trial.py` runs the whole chain — source -> channel ->
+interferometer -> taps — and checks that the bits read off the output ports match
+the bits Alice prepared. It is also the only end-to-end exercise of
+`QuantumChannel`'s coherent-amplitude path, and its CLI shows the two outcomes
+that differ: attenuation costs signal and no key, per-pulse phase noise costs
+key.
 
 ### 3.4 Detectors
 
@@ -362,18 +381,24 @@ Save a JSONL event log when ordering is unclear.
 Not natively modeled. If the spec requires one, report it as a gap and propose either an
 approximation or a new component:
 
-- **Coherent-pulse interference and detection.** The *transmitter* and
-  *transport* now exist — `WeakCoherentPulseSource` (§3.1), `CoherentState`,
-  `components/coherent_optics.py`, and `QuantumChannel`'s amplitude path
-  (§3.2). The *receiver* does not. There is no beamsplitter, no
-  interferometer, and no detector that accepts an amplitude-only signal:
-  `DetectorArray` measures a qubit carrier and raises on a coherent pulse. So
-  DPS, DQPS, COW, decoy-state BB84 and interference visibility remain unbuilt
-  end to end, and a coherent pulse can currently be wired source → channel →
-  terminating component and no further. `coherent_optics` ships only
-  `attenuated` and `phase_shifted`; `split_50_50`, `interfere`,
-  `gaussian_temporal_overlap` and `click_probability` arrive with their
-  callers. The design for the rest is `docs/dev/dps-design.md`
+- **Coherent-pulse detection.** The transmitter, transport and receiver
+  *optics* now exist — `WeakCoherentPulseSource` (§3.1), `CoherentState`,
+  `components/coherent_optics.py`, `QuantumChannel`'s amplitude path (§3.2) and
+  `DelayInterferometer` (§3.3). **The detector does not.** Nothing in `src/`
+  turns an amplitude into a click: `DetectorArray` measures a qubit carrier and
+  raises on a coherent pulse, and `click_probability` has not shipped. So a
+  coherent pulse can be wired source → channel → interferometer → terminating
+  component and no further, and DPS, DQPS, COW, decoy-state BB84 and
+  interference visibility are not yet closed end to end. `examples/dps` reads
+  its bits from the interferometer's own reported intensities, which is a
+  stand-in for detection and not a model of it — no photon-number statistics,
+  detector efficiency, dark counts or double clicks enter anywhere on this path.
+  The design for the rest is `docs/dev/dps-design.md`
+- **Interferometer non-idealities.** `DelayInterferometer` is ideal: no
+  insertion loss, no arm imbalance, no splitting-ratio error, no internal phase
+  noise, and no thermal or mechanical drift of the arm lengths. Every
+  imperfection must arrive with the incoming pulses. Pairing beyond nearest
+  neighbour (`tau = 2T` and up) needs a keyed queue and a different component.
 - Decoy-state BB84 (photon-number statistics)
 - Free-space / satellite channels, atmospheric turbulence
 - Continuous-variable QKD (repo is discrete-variable)

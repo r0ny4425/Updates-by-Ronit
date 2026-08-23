@@ -1,7 +1,12 @@
-"""Runnable DPS-QKD transmitter example.
+"""Runnable DPS-QKD example: transmitter, fibre, and receiver optics.
 
-Stage 1 of the DPS build: Alice's weak coherent pulse source, running on a real
-timeline and producing real preparation reports.
+Alice's weak coherent pulse source, a quantum channel, and Bob's delay
+interferometer, running on a real timeline. Alice's differential bits come from
+her preparation reports; Bob's come from which interferometer output port is
+bright. The default run is lossless and noiseless, so they agree exactly.
+
+Two flags turn the physics on. ``--channel-attenuation-db-per-km`` costs signal
+and no key; ``--channel-phase-noise-rad`` costs key.
 """
 
 from __future__ import annotations
@@ -38,6 +43,29 @@ def parse_args() -> argparse.Namespace:
             "draw an independent carrier phase per pulse. This destroys the "
             "differential-phase encoding; it is here so that failure is "
             "reproducible."
+        ),
+    )
+    parser.add_argument(
+        "--channel-attenuation-db-per-km",
+        type=float,
+        default=None,
+        help=(
+            "fibre attenuation (default 0.0, i.e. lossless). Real standard "
+            "fibre at 1550 nm is about 0.2. On a coherent pulse this is "
+            "deterministic -- the amplitude is scaled, never discarded -- so "
+            "channel_lost stays 0 and the run still replays at any seed. Both "
+            "interferometer arms scale together, so the bits survive."
+        ),
+    )
+    parser.add_argument(
+        "--channel-phase-noise-rad",
+        type=float,
+        default=None,
+        help=(
+            "per-pulse optical phase noise (default 0.0). Non-zero destroys "
+            "the differential-phase encoding, the same way "
+            "--randomize-carrier-phase does but from the fibre rather than the "
+            "laser. Try 1.0 to see the bit agreement break."
         ),
     )
     parser.add_argument(
@@ -101,6 +129,8 @@ def main() -> None:
         num_slots=args.num_slots,
         mean_photon_number=args.mean_photon_number,
         randomize_carrier_phase=args.randomize_carrier_phase,
+        channel_attenuation_db_per_km=args.channel_attenuation_db_per_km,
+        channel_phase_noise_rad=args.channel_phase_noise_rad,
         log_file=args.log_file,
     )
 

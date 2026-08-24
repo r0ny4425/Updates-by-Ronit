@@ -16,6 +16,14 @@ Every signal in the simulator today carries a ``"qubit"`` record, so the two
 questions currently have the same answer and ``role == "qubit"`` is equivalent
 to ``state_ref is not None``. They diverge for a coherent pulse that carries a
 polarization state beside its amplitude, which is why the role exists.
+
+:func:`qubit_carrier_targets_from_signal` asks both at once, for the components
+that only work when the answers agree. A qstate-measuring component -- a
+detector array, a Bell analyzer, a memory -- measures, collapses, or stores the
+record it is handed, which is correct only when that record *is* the carrier.
+Handed a mode record it would silently treat a whole coherent pulse as one
+photon, so those callers resolve targets through the requiring form rather than
+the role-agnostic one.
 """
 
 from __future__ import annotations
@@ -178,8 +186,64 @@ def qstate_targets_from_signal(signal: Signal) -> tuple[SubsystemId, ...]:
     return (SubsystemId(handle.label),)
 
 
+def qubit_carrier_targets_from_signal(signal: Signal) -> tuple[SubsystemId, ...]:
+    """Return a signal's qstate targets, requiring the record to be the carrier.
+
+    The guarded form of :func:`qstate_targets_from_signal`, for components that
+    measure, collapse, or store the record they are handed.
+
+    Parameters
+    ----------
+    signal : Signal
+        Signal whose qstate record must be the propagating carrier.
+
+    Returns
+    -------
+    tuple[SubsystemId, ...]
+        Single resolved qstate subsystem target, exactly as
+        :func:`qstate_targets_from_signal` returns it.
+
+    Raises
+    ------
+    ValueError
+        If the signal carries no ``state_ref``, does not carry exactly one
+        state target, or carries a record whose role is ``"mode"``.
+    TypeError
+        If the single target is not a ``SubsystemHandle``.
+
+    Notes
+    -----
+    **Presence is not enough, which is the whole reason this exists.** A bare
+    coherent pulse has no ``state_ref`` and is already refused by the underlying
+    resolver. A *polarized* coherent pulse has one, so it passes that check and
+    reaches a measurement that would treat the polarization record as the thing
+    that propagates -- routing an entire pulse to one detector, making the
+    double-click rate identically zero at every mean photon number and the click
+    rate independent of it. The run completes and the numbers look reasonable,
+    which is what makes the loud failure here worth the line.
+
+    Use :func:`qstate_targets_from_signal` directly where the role genuinely
+    does not matter: a channel resolves a mode record's subsystem so that noise
+    can act on it, and must keep doing so.
+    """
+    role = qstate_payload_role(signal)
+
+    if role == "mode":
+        raise ValueError(
+            f"signal {signal.id!r} carries a qstate record with kind='mode': "
+            "the record describes the optical mode a coherent amplitude "
+            "occupies rather than the propagating carrier, so measuring it "
+            "would treat the whole pulse as a single photon and route it to "
+            "one detector; optical detection of a coherent pulse is not "
+            "implemented yet, so no component here can receive this signal"
+        )
+
+    return qstate_targets_from_signal(signal)
+
+
 __all__ = [
     "QstatePayloadRole",
     "qstate_payload_role",
     "qstate_targets_from_signal",
+    "qubit_carrier_targets_from_signal",
 ]

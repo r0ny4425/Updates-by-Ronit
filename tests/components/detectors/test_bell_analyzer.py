@@ -23,6 +23,7 @@ from simyuj.components.ports import Port, PortDirection, PortKind
 from simyuj.engine.component import Component
 from simyuj.engine.event import Event
 from simyuj.engine.timeline import Timeline
+from simyuj.primitives.coherent_state import CoherentState
 from simyuj.primitives.subsystems import SubsystemHandle
 from simyuj.qstate import StateNotFoundError, SubsystemId
 from simyuj.qstate.measure import BellResult
@@ -102,6 +103,36 @@ def _signal_for_target(
             ),
         ),
         protocol_params=protocol_params,
+    )
+
+
+def _polarized_pulse_signal(timeline: Timeline) -> Signal:
+    """A polarized coherent pulse, exactly as WeakCoherentPulseSource builds one."""
+    subsystem = SubsystemId("wcp:mode:1")
+    state_ref = timeline.qstate.prepare(
+        (1 + 0j, 0j),
+        rep="ket",
+        subsystems=(subsystem,),
+    )
+
+    return Signal(
+        id="pulse-0",
+        signal_kind=SignalKind.PULSE,
+        encoding_scheme=EncodingScheme.POLARIZATION,
+        emission_time=0,
+        origin="wcp",
+        state_ref=state_ref,
+        state_targets=(
+            SubsystemHandle(
+                label=str(subsystem),
+                kind="mode",
+                index=0,
+                metadata=(("qstate_subsystem", str(subsystem)),),
+            ),
+        ),
+        coherent_state=CoherentState.from_mean_photon_number(0.1),
+        polarization=(1 + 0j, 0j),
+        temporal_mode_sigma_s=1e-11,
     )
 
 
@@ -475,6 +506,26 @@ def test_bell_state_analyzer_requires_collapsing_bell_measurement() -> None:
 
     with pytest.raises(ValueError, match="requires collapse=True"):
         timeline.run_until_empty()
+
+
+def test_bell_state_analyzer_rejects_mode_role_signal() -> None:
+    """A polarized coherent pulse must not be buffered as a Bell-analysis arm.
+
+    Nothing routes pulses to an analyzer today, but the record carries a
+    ``state_ref``, so only the role distinguishes it from a carrier.
+    """
+    timeline = Timeline(master_seed=123)
+    analyzer = BellStateAnalyzer(device_id="bsa", coincidence_window_ticks=0)
+    analyzer.bind(binding_context(timeline))
+
+    signal = _polarized_pulse_signal(timeline)
+    event = _event(analyzer=analyzer, side="left", signal=signal, time=10)
+
+    with pytest.raises(ValueError, match="kind='mode'") as excinfo:
+        analyzer.handle_event(event, timeline)
+
+    assert "not implemented yet" in str(excinfo.value)
+    assert not analyzer.reports
 
 
 @pytest.mark.parametrize("label", ["phi+", "phi-", "psi+", "psi-"])

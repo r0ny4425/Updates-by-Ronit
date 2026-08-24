@@ -26,7 +26,7 @@ from simyuj.tracing.levels import LogLevel
 
 from ..connections import PortDelivery
 from ..ports import Port, PortDirection, PortKind
-from ..quantum_targets import qstate_targets_from_signal
+from ..quantum_targets import qubit_carrier_targets_from_signal
 from .primitives.actions import ACTION_DETECT_SIGNAL
 from .primitives.click import ClickPatternResolver, ThresholdClickResolver
 from .primitives.gate import AlwaysOpenGate, GateModel
@@ -392,7 +392,7 @@ class DetectorArray(Component):
         event_id: int | None,
         action: str,
     ) -> None:
-        targets = qstate_targets_from_signal(signal)
+        targets = qubit_carrier_targets_from_signal(signal)
         time = timeline.current_time
         active_detection_duration_ticks = active_detection_duration_at_arrival(
             time=time,

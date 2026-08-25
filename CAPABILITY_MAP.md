@@ -113,11 +113,13 @@ Decoy intensity levels are one new selector class in
 `sources/coherent_preparation.py` and no other change; the surrounding
 photon-number analysis is protocol-level and belongs in the agent.
 
-**The coherent pulse has transport and receiver optics, but no detector.**
-`QuantumChannel` branches on the payload role and carries an amplitude
-deterministically (§3.2), and `DelayInterferometer` recombines adjacent pulses
-(§3.3). What a `WeakCoherentPulseSource` still cannot be wired to is anything
-that turns light into a click. See section 5 and `docs/dev/dps-design.md`.
+**The coherent pulse is closed end to end.** `QuantumChannel` branches on the
+payload role and carries an amplitude deterministically (§3.2), and
+`DelayInterferometer` recombines adjacent pulses and detects both output arms
+(§3.3, §3.4). What is still missing on this path is polarization-resolved
+detection — a polarizing beamsplitter splits a pulse rather than routing it, and
+`polarization_weights` has not shipped — which is what decoy-state BB84 needs.
+See section 5 and `docs/dev/dps-design.md`.
 
 ### 3.2 Channels
 
@@ -172,13 +174,22 @@ the report.
 
 | Spec says | Module | Parameters |
 |---|---|---|
-| delay-line / unbalanced Mach-Zehnder interferometer, DPS receiver optics | `DelayInterferometer` in `simyuj.components.interferometers` | `delay_s` **or** `delay_ticks` (exactly one), `flush_priority` |
+| delay-line / unbalanced Mach-Zehnder interferometer, DPS receiver | `DelayInterferometer` in `simyuj.components.interferometers` | `detectors` (**required**), `delay_s` **or** `delay_ticks` (exactly one, and it is tau), `short_delay_ticks`, `click_resolver`, `detection_window_ticks`, `gate_model`, `flush_priority` |
 | 50:50 beamsplitter, interference, pulse-envelope overlap | `components/coherent_optics.py` | `split_50_50`, `interfere`, `gaussian_temporal_overlap` |
+| coherent-pulse click probability | `components/coherent_optics.py` | `click_probability(mu, efficiency=eta)` = `1 - exp(-eta*mu)` |
 
 `DelayInterferometer` has one quantum ingress port, **two** quantum egress ports
-(`out_0`, `out_1`, both of which must be connected), and a classical `report`
-port carrying `InterferenceReport`. It is ideal by specification and declares no
-RNG streams.
+(`out_0`, `out_1`, both of which must be connected), a classical `report` port
+carrying `InterferenceReport`, and a classical `detection` port carrying
+`DetectionReport`.
+
+**Its optics are ideal; its two internal detectors are not.** A DPS receiver is
+one physical unit, so detection lives inside rather than downstream — which also
+means the two BS2 outputs become one slot decision with no arrival buffering.
+The `detectors` parameter is required and takes exactly two
+`SinglePhotonDetector` channels, index 0 reading `out_0`; `detectors=None` is a
+supported, explicit choice that reproduces the pre-detection component exactly,
+including declaring no RNG stream.
 
 Read these before wiring one:
 
@@ -190,16 +201,34 @@ Read these before wiring one:
   execute. `Timeline.run_until_empty()` does this.
 - It never validates `tau` against the pulse period — it cannot, it never sees
   the clock. A mismatch appears as `temporal_overlap` collapsing on every slot.
+- `short_delay_ticks` is the **common** transit both arms take; `delay_ticks` is
+  the **extra** time the long arm takes. Only the difference is physical, so a
+  common transit shifts every downstream tick and changes no interference.
+- Both ports are evaluated independently, so **a double click from two signal
+  clicks is a real event at a real rate** — unlike `DetectorArray`, where a
+  readout exposes one detector per outcome and that rate is identically zero.
+  `ThresholdClickResolver(double_click_policy=...)` decides what the slot then
+  reports; the rate is physics and the response is protocol.
+- The two edge slots split `mu/4` to each port and carry no bit. They still get
+  a report — dropping them is the agent's job, on the `None` pulse index in the
+  report metadata.
+- A `DetectionReport` from here carries `measurement_label=None` and
+  `signal_id=None`: nothing was measured, and two signals left BS2 rather than
+  one. `outcome` is the port name, and `meta` carries `interference_index` — the
+  join key back to the `InterferenceReport` — plus mu, phase, overlap and both
+  pulse indices.
 
 **No phase modulator exists and none is planned; that is not the gap.**
 `WeakCoherentPulseSource` (§3.1) chooses the encoding phase itself, so a separate
 modulator would add an event hop and a report describing a phase the source
-already knows. The receiver piece still missing is the **optical detector**, not
-a modulator — see §5.
+already knows. The receiver piece still missing is **polarization-resolved
+detection**, not a modulator — see §5.
 
 `examples/dps/trial.py` runs the whole chain — source -> channel ->
 interferometer -> taps — and checks that the bits read off the output ports match
-the bits Alice prepared. It is also the only end-to-end exercise of
+the bits Alice prepared. It still runs `detectors=None` and reads its bits from
+the reported intensities: turning that example over to real detection needs an
+agent to consume the reports, and is not done. It is also the only end-to-end exercise of
 `QuantumChannel`'s coherent-amplitude path, and its CLI shows the two outcomes
 that differ: attenuation costs signal and no key, per-pulse phase noise costs
 key.
@@ -213,12 +242,28 @@ key.
 | which detector fires for which outcome | `DetectorArray(readout={...})` | e.g. `{"Z": {"0": "d_z0", "1": "d_z1"}}` |
 | double clicks, click discrimination | `ThresholdClickResolver(double_click_policy=...)` | From `detectors.primitives.click` |
 | detection gate / coincidence window | `detection_window_ticks`, `detectors.primitives.window`, `.gate` | |
+| coherent-pulse / weak-laser detection | `DelayInterferometer(detectors=...)` (§3.3) | Two channels, `1 - exp(-eta*mu)` per port, genuine double clicks |
+| detection probability that is not a bare efficiency | `DetectorExposure(signal_click_probability=...)` | **Overrides** `params.efficiency`, never multiplies it |
 | Bell-state measurement, BSM, swapping node | `BellStateAnalyzer` + `ACTION_RUN_BELL_ANALYSIS`, `BSMModel` | Real device event, not a direct qstate call |
 | direct qubit readout (no photon) | `simyuj.components.detectors.qubit_readout` | |
 | detector output | `DetectionReport`, `ACTION_DETECT_SIGNAL` | |
 
 Detector primitives live in `detectors/primitives/`: `params`, `measurement`, `readout`,
 `click`, `dark_counts`, `gate`, `window`, `rng`, `reports`, `result_labels`, `actions`.
+
+`SinglePhotonDetector` is **not** a `Component`: no ports, no timeline, no
+qstate. It is composed into event-facing components — `DetectorArray`,
+`BellStateAnalyzer`, `DelayInterferometer` — which own the ports and the RNG
+streams. A new receiver should compose it too, not subclass a component built
+around a qstate spine.
+
+**`efficiency` is not "probability of a click".** For a qubit carrier it is, but
+for a coherent pulse the click probability is `1 - exp(-eta*mu)`, so a perfect
+detector at `mu = 0.2` still sees nothing 82% of the time — most pulses contain
+no photon at all. When an exposure carries `signal_click_probability`, that value
+*replaces* `params.efficiency` for the signal click: `eta` is already inside the
+exponent, and multiplying would apply it twice and lower every rate by that
+factor with nothing raising. Dark counts and afterpulses always read `params`.
 
 ### 3.5 Quantum memories
 
@@ -381,25 +426,49 @@ Save a JSONL event log when ordering is unclear.
 Not natively modeled. If the spec requires one, report it as a gap and propose either an
 approximation or a new component:
 
-- **Coherent-pulse detection.** The transmitter, transport and receiver
-  *optics* now exist — `WeakCoherentPulseSource` (§3.1), `CoherentState`,
-  `components/coherent_optics.py`, `QuantumChannel`'s amplitude path (§3.2) and
-  `DelayInterferometer` (§3.3). **The detector does not.** Nothing in `src/`
-  turns an amplitude into a click: `DetectorArray` measures a qubit carrier and
-  raises on a coherent pulse, and `click_probability` has not shipped. So a
-  coherent pulse can be wired source → channel → interferometer → terminating
-  component and no further, and DPS, DQPS, COW, decoy-state BB84 and
-  interference visibility are not yet closed end to end. `examples/dps` reads
-  its bits from the interferometer's own reported intensities, which is a
-  stand-in for detection and not a model of it — no photon-number statistics,
-  detector efficiency, dark counts or double clicks enter anywhere on this path.
-  The design for the rest is `docs/dev/dps-design.md`
-- **Interferometer non-idealities.** `DelayInterferometer` is ideal: no
-  insertion loss, no arm imbalance, no splitting-ratio error, no internal phase
-  noise, and no thermal or mechanical drift of the arm lengths. Every
-  imperfection must arrive with the incoming pulses. Pairing beyond nearest
-  neighbour (`tau = 2T` and up) needs a keyed queue and a different component.
-- Decoy-state BB84 (photon-number statistics)
+- **Photon arrival time within the pulse envelope.** A click is reported at the
+  detector window's start tick plus jitter, never at a position sampled inside
+  the Gaussian the pulse actually occupies. Anything that needs sub-pulse
+  timing resolution — time-bin discrimination finer than a slot, a COW monitor
+  line, a jitter-limited QBER budget — is therefore not modelled.
+
+  This is blocked on a real defect rather than merely unwritten. Every timing
+  term in `SinglePhotonDetector` is currently non-negative (`_apply_jitter`
+  clamps at `max(0, ...)`), which makes the window filter's lower bound at
+  `single_photon.py:193` dead code and the whole-window dead-time gate at `:174`
+  conservative-only. An arrival offset is **signed** — the envelope is symmetric
+  about the pulse tick, by the contract on `Signal.temporal_mode_sigma_s` — so
+  adding one would make that filter silently discard early-arriving photons,
+  about half the envelope, with no error and no symptom beyond an efficiency
+  quietly too low. There is a second pre/post-jitter mix in the afterpulse model
+  (`elapsed_ticks < 0` returns `None` silently). Fix the asymmetry first, with a
+  fingerprint test, then add the term.
+- **Envelope shape out of an interferometer.** At `|gamma| < 1` each output port
+  carries an interfering component plus an orthogonal residual: the true
+  envelope is a superposition of two Gaussians `delta_ticks` apart, and the
+  single `temporal_mode_sigma_s` the port reports describes neither. The mean
+  photon number is exact and a threshold detector reading intensity is
+  unaffected, which is why detection is sound today — but this is the reason the
+  arrival-sampling gap above cannot simply be closed at the detector.
+- **Polarization-resolved detection, and therefore decoy-state BB84.** A weak
+  coherent pulse hitting a polarizing beamsplitter *splits*: `mu_H = mu*w_H` and
+  `mu_V = mu*w_V` reach two detectors independently, and the resulting
+  double-click rate is basis-dependent and physically meaningful. Measuring the
+  polarization qstate and routing the whole pulse to one detector is the
+  single-photon model and would make the double-click rate identically zero at
+  every `mu` — the guard at `quantum_targets.qubit_carrier_targets_from_signal`
+  exists to stop exactly that. `polarization_weights` and
+  `rotated_polarization` have not shipped. See `docs/dev/dps-design.md` §8.
+- **Photon-number resolution on a detected signal.** A signal contributes at
+  most one Bernoulli candidate per port, so `P(n >= 2 | click)` is not modelled
+  even at `photon_number_resolving=True` — that flag only governs whether dark
+  counts and afterpulses can add further clicks in one window.
+- **Interferometer non-idealities.** `DelayInterferometer`'s optics are ideal:
+  no insertion loss, no arm imbalance, no splitting-ratio error, no internal
+  phase noise, and no thermal or mechanical drift of the arm lengths. Every
+  optical imperfection must arrive with the incoming pulses. Pairing beyond
+  nearest neighbour (`tau = 2T` and up) needs a keyed queue and a different
+  component; it is a gap, not a configuration.
 - Free-space / satellite channels, atmospheric turbulence
 - Continuous-variable QKD (repo is discrete-variable)
 - Wavelength multiplexing, frequency conversion

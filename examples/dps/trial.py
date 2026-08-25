@@ -244,6 +244,10 @@ def run_dps_transmitter_trial(
     # is why that value is reported below.
     interferometer = DelayInterferometer(
         device_id=receiver.device_id,
+        # Optics only for now: this example reads its bits from the reported
+        # intensities, and wiring the receiver over to real detection is its own
+        # change -- it needs an agent to consume the reports. See the run report.
+        detectors=None,
         delay_ticks=dps_slot_period_ticks(config.clock_hz),
     )
     tap_0 = PulseTap(device_id=f"{receiver.device_id}_out0_tap")

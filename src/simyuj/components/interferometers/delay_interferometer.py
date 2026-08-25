@@ -7,12 +7,30 @@ beamsplitter with the *next* pulse's undelayed arm. In DPS-QKD
 phases of two adjacent slots and the phase difference appears as an intensity
 difference between the two output ports.
 
-**The device is ideal.** No internal loss, no internal phase noise, no imperfect
-splitting ratio, no photon-number sampling, no detector behaviour. Every
-imperfection must arrive with the incoming pulses; loss and phase noise already
-come from the channel. What the component adds is the delay, the recombination,
-and the temporal-mode bookkeeping that decides how much the two contributions
+**The optics are ideal.** No internal loss, no internal phase noise, no
+imperfect splitting ratio, no photon-number sampling. Every optical imperfection
+must arrive with the incoming pulses; loss and phase noise already come from the
+channel. What the component adds optically is the delay, the recombination, and
+the temporal-mode bookkeeping that decides how much the two contributions
 actually overlap.
+
+The receiver is one unit
+------------------------
+
+Two ``SinglePhotonDetector`` channels sit inside, one per output port, and they
+are not ideal -- efficiency, dark counts, dead time, jitter and afterpulsing are
+all theirs. A DPS receiver is one physical unit, thermally stabilised together,
+and no protocol deploys the interferometer bare; putting detection downstream
+would also invent a slot-join problem that does not exist here, since BS2
+produces both outputs in one call and one slot decision follows with no
+buffering and no cross-component coordination.
+
+Each port's click probability is
+:math:`P_k = 1 - e^{-\\eta_d \\mu_k}`, evaluated **independently**, so a real
+double click occurs at a real rate -- unlike a readout that maps one measured
+outcome to one detector, where two signal clicks are structurally impossible.
+Detection is opt-in: ``detectors=None`` reproduces this component before
+detection existed, exactly.
 
 Nearest-neighbour only
 ----------------------
@@ -43,7 +61,8 @@ carries.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from collections.abc import Sequence
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Optional
 
 from simyuj.engine.component import Component
@@ -52,6 +71,7 @@ from simyuj.primitives.coherent_state import CoherentState
 from simyuj.primitives.ids import ensure_nonempty_id
 from simyuj.primitives.units import seconds_to_ticks, ticks_to_seconds
 from simyuj.primitives.validation import (
+    require_non_negative_int,
     require_optional_positive_real,
     require_positive_int,
 )
@@ -59,11 +79,29 @@ from simyuj.runtime.binding import BindingContext
 from simyuj.signal import EncodingScheme, Signal, SignalKind
 from simyuj.tracing.levels import LogLevel
 
-from ..coherent_optics import gaussian_temporal_overlap, interfere, split_50_50
+from ..coherent_optics import (
+    click_probability,
+    gaussian_temporal_overlap,
+    interfere,
+    split_50_50,
+)
 from ..connections import PortDelivery, require_connection
+from ..detectors.primitives.click import ClickPatternResolver, ThresholdClickResolver
+from ..detectors.primitives.gate import AlwaysOpenGate, GateModel
+from ..detectors.primitives.readout import DetectorExposure
+from ..detectors.primitives.reports import DetectionReport
+from ..detectors.primitives.rng import DetectorRNGStreams
+from ..detectors.primitives.window import (
+    bind_detector_rngs,
+    evaluate_detector_windows,
+    normalize_detectors,
+    validate_gate_model,
+)
+from ..detectors.single_photon import SinglePhotonDetector
 from ..ports import Port, PortDirection, PortKind
 
 if TYPE_CHECKING:
+    from simyuj.engine.rng_manager import DeterministicRNG
     from simyuj.engine.timeline import Timeline
 
 
@@ -90,6 +128,15 @@ ACTION_FLUSH_DELAY_ARM = "flush_delay_arm"
 PORT_OUT_0 = "out_0"
 PORT_OUT_1 = "out_1"
 
+PORT_DETECTION = "detection"
+"""Classical egress carrying one ``DetectionReport`` per interference slot.
+
+Separate from the ``"report"`` port, which carries ``InterferenceReport``. The
+two have different consumers -- optics inspection and a protocol agent -- and an
+agent that type-checks its inbox, which is the established pattern, would reject
+a mixed stream.
+"""
+
 _VACUUM = CoherentState(0j)
 
 _FLUSH_ORDERING_MARGIN_TICKS = 1
@@ -112,8 +159,10 @@ class ArmContribution:
         Post-BS1 amplitude on this arm.
     bs2_tick : int
         Tick at which this contribution arrives at the second beamsplitter. For
-        the short arm that is the pulse's arrival tick; for the long arm it is
-        the arrival tick plus :math:`\\tau`.
+        the short arm that is the pulse's arrival tick plus the common transit
+        ``short_delay_ticks``; for the long arm it is that plus :math:`\\tau`.
+        Their difference is therefore :math:`\\tau` alone, whatever the common
+        transit is.
     sigma_s : float
         Field-envelope standard deviation in seconds, copied from the pulse.
     wavelength_nm : float
@@ -302,6 +351,19 @@ def vacuum_like(other: ArmContribution) -> ArmContribution:
     )
 
 
+def _report_ready_time(*, report: DetectionReport, fallback_time: int) -> int:
+    """Tick at which a slot decision is available to a consumer.
+
+    The latest raw click when there is one, because that is when the last
+    contributing channel actually fired; otherwise the detector-window
+    completion tick, because a no-click report is only known once the windows
+    have closed. Mirrors ``detector_array._report_ready_time``.
+    """
+    if report.raw_clicks:
+        return max(click.time for click in report.raw_clicks)
+    return fallback_time
+
+
 def _incoming_pulse_index(signal: Signal) -> Optional[int]:
     """Return the source slot from a pulse's metadata, or ``None``."""
     for key, value in signal.meta:
@@ -319,13 +381,28 @@ class DelayInterferometer(Component):
     device_id : str
         Non-empty component identifier used in event metadata, logs, emitted
         signal identifiers, and report identifiers.
+    detectors : Sequence[SinglePhotonDetector] or None
+        **Required, with no default.** Exactly two detector channels, index 0
+        reading ``out_0`` and index 1 reading ``out_1``, or ``None`` for an
+        optics-only device that emits pulses and decides no clicks.
+
+        A DPS receiver is one physical unit -- interferometer and detectors
+        thermally stabilised together -- and no protocol deploys the
+        interferometer bare, so ``None`` should be something a caller says on
+        purpose rather than something a default hands them. It is a supported
+        and documented choice: it reproduces this component's behaviour before
+        detection existed, exactly, including declaring no RNG stream, and it is
+        what makes the optics testable against exact amplitudes and exact ticks
+        rather than against click statistics.
     delay_s : float or None, default=None
-        Long-arm delay :math:`\\tau` in seconds. Exactly one of ``delay_s`` and
-        ``delay_ticks`` must be supplied.
+        The **extra** time the long arm takes, :math:`\\tau`, in seconds. This
+        is the only quantity the interference depends on: the common transit is
+        ``short_delay_ticks`` and cancels out of the arms' separation. Exactly
+        one of ``delay_s`` and ``delay_ticks`` must be supplied.
     delay_ticks : int or None, default=None
-        Long-arm delay in simulation ticks, for callers that need tick-exact
-        control. Exactly one of ``delay_s`` and ``delay_ticks`` must be
-        supplied; there is no override precedence, because ``delay_s`` has no
+        The same :math:`\\tau` in simulation ticks, for callers that need
+        tick-exact control. Exactly one of ``delay_s`` and ``delay_ticks`` must
+        be supplied; there is no override precedence, because ``delay_s`` has no
         other role here and a silent winner would only be ambiguity.
     flush_priority : int, default=10000
         Event priority for the deadline on a held long arm. Timeline ordering is
@@ -335,6 +412,23 @@ class DelayInterferometer(Component):
         Equality is worse than inversion: the tie falls through to ``event_id``,
         making the outcome depend on which event was scheduled first rather than
         on anything physical. The default gap is wide on purpose.
+    short_delay_ticks : int, default=0
+        Common transit both arms take, in simulation ticks. Stating it is more
+        honest than an instantaneous short arm, and it changes nothing physical:
+        both arms shift together, so the separation that sets :math:`\\gamma`
+        stays :math:`\\tau` alone. ``0`` reproduces an instantaneous short arm
+        exactly.
+    click_resolver : ClickPatternResolver, optional
+        Resolver turning the slot's raw clicks into one ``DetectionReport``.
+        Defaults to ``ThresholdClickResolver()``, whose ``double_click_policy``
+        is where a protocol's response to a double click belongs. The *rate* is
+        physics and belongs to the two ports; do not conflate them.
+    detection_window_ticks : int, default=1
+        Positive detector observation window opened at each BS2 resolution.
+    gate_model : GateModel, optional
+        Gate schedule queried per exposure. Defaults to ``AlwaysOpenGate()``.
+        A gated receiver must still be open at ``last_arrival + 2 * tau + 1``,
+        where the final flush lands, or accept losing that slot.
 
     Attributes
     ----------
@@ -344,10 +438,20 @@ class DelayInterferometer(Component):
         Quantum output ports named ``"out_0"`` and ``"out_1"``. Both must be
         connected: an ideal interferometer always puts light on both, and the
         destructive port carrying nearly nothing is a result, not an absence.
+        They remain wired even with detectors fitted -- they are an inspection
+        point, not a deployment boundary.
     report_port : Port
-        Classical output port named ``"report"``.
+        Classical output port named ``"report"``, carrying ``InterferenceReport``.
+    detection_port : Port
+        Classical output port named ``"detection"``, carrying
+        ``DetectionReport``. Separate from ``report_port`` because the two have
+        different consumers and an agent that type-checks its inbox would reject
+        a mixed stream.
     reports : list[InterferenceReport]
-        Stored reports in resolution order.
+        Stored optics reports in resolution order.
+    detection_reports : list[DetectionReport]
+        One slot decision per combination, in the same order. Empty when
+        ``detectors is None``.
     interference_count : int
         Number of BS2 combinations resolved so far.
     held_arm_count : int
@@ -358,8 +462,9 @@ class DelayInterferometer(Component):
     ------
     ValueError
         At construction, if the delay is not given exactly once or resolves to
-        fewer than one tick. At event time, if the arriving signal carries no
-        ``coherent_state``, carries a ``state_ref``, or carries no
+        fewer than one tick, or if ``detectors`` is neither ``None`` nor exactly
+        two channels with distinct ids. At event time, if the arriving signal
+        carries no ``coherent_state``, carries a ``state_ref``, or carries no
         ``temporal_mode_sigma_s``.
 
     Notes
@@ -398,7 +503,7 @@ class DelayInterferometer(Component):
     and therefore runs after everything in the current one **regardless of
     priority**. A delay-0 self-event would silently escape the priority ordering
     this component relies on. The deferral is safe because it is only reached
-    when ``partner.bs2_tick > arrival_tick``, strictly; the flush is safe
+    when the later BS2 tick exceeds the arrival tick, strictly; the flush is safe
     because :math:`\\tau \\ge 1` tick makes ``arrival + 2\\tau + 1`` at least
     three ticks away.
 
@@ -437,13 +542,18 @@ class DelayInterferometer(Component):
     interfering component, and the short arm's ``temporal_mode_sigma_s``;
     **none of the phase or width may be used for a further phase-sensitive or
     temporal-mode interference.** At :math:`|\\gamma| = 1` the output is
-    genuinely single-mode and all three are exact. A threshold detector reading
-    intensity, which is what follows this device, is unaffected.
+    genuinely single-mode and all three are exact. The internal detectors read
+    intensity alone and are unaffected -- **but only because they read intensity
+    alone.** Sampling a photon's arrival *within* the envelope would depend on
+    the width this truncation approximates, and is not modelled; see
+    ``CAPABILITY_MAP.md`` section 5.
 
-    **No randomness.** The device is ideal by specification, so ``bind``
-    declares no RNG streams at all rather than declaring one that is never
-    consumed. Stream values derive from the stream path, so adding one later
-    would leave every existing replay untouched.
+    **All the randomness is the detectors'.** The optics sample nothing, so at
+    ``detectors=None`` ``bind`` declares no RNG stream at all rather than one
+    that is never consumed. With detectors fitted the streams are theirs, on the
+    four-segment path ``bind_detector_rngs`` builds. Stream values derive from
+    the stream path rather than creation order, so fitting detectors cannot
+    perturb any other component's draws.
 
     A run must extend to ``last_arrival + 2 * tau + 1`` for the final flush, and
     to any outstanding pending resolution tick, or those combinations never
@@ -452,25 +562,50 @@ class DelayInterferometer(Component):
 
     Insertion loss, arm imbalance, non-ideal splitting ratio, thermal or
     mechanical drift of the arm lengths, and polarization mismatch between the
-    arms are not modelled. See ``CAPABILITY_MAP.md`` section 5.
+    arms are not modelled. Neither is arrival-time sampling within the pulse
+    envelope, nor polarization-resolved detection. See ``CAPABILITY_MAP.md``
+    section 5.
     """
 
     device_id: str
+    # Required, and deliberately without a default: a DPS receiver is one
+    # physical unit and there is no protocol that deploys the interferometer
+    # bare, so `detectors=None` should be something a caller says on purpose.
+    detectors: Optional[Sequence[SinglePhotonDetector]]
     delay_s: Optional[float] = None
     delay_ticks: Optional[int] = None
     flush_priority: int = 10_000
+
+    # Appended after `flush_priority` rather than filed with the delays, so no
+    # existing keyword's positional index moves.
+    short_delay_ticks: int = 0
+    click_resolver: ClickPatternResolver = field(default_factory=ThresholdClickResolver)
+    detection_window_ticks: int = 1
+    gate_model: GateModel = field(default_factory=AlwaysOpenGate)
 
     input_port: Port = field(init=False)
     output_port_0: Port = field(init=False)
     output_port_1: Port = field(init=False)
     report_port: Port = field(init=False)
+    detection_port: Port = field(init=False)
     reports: list[InterferenceReport] = field(init=False, default_factory=list)
+    detection_reports: list[DetectionReport] = field(init=False, default_factory=list)
 
     _resolved_delay_ticks: int = field(init=False)
     _bound_timeline_id: Optional[int] = field(init=False, default=None)
     _held: Optional[HeldLongArm] = field(init=False, default=None)
     _hold_counter: int = field(init=False, default=0)
     _interference_count: int = field(init=False, default=0)
+    _detector_rngs: dict[str, DetectorRNGStreams] = field(
+        init=False,
+        default_factory=dict,
+        repr=False,
+    )
+    _resolver_rng: Optional["DeterministicRNG"] = field(
+        init=False,
+        default=None,
+        repr=False,
+    )
 
     def __post_init__(self) -> None:
         ensure_nonempty_id(self.device_id, field_name="device_id")
@@ -479,6 +614,22 @@ class DelayInterferometer(Component):
             raise TypeError("flush_priority must be int")
 
         self._resolved_delay_ticks = self._resolve_delay()
+        self.short_delay_ticks = require_non_negative_int(
+            self.short_delay_ticks,
+            field_name="short_delay_ticks",
+        )
+        self.detectors = self._resolve_detectors()
+
+        # Validated whether or not detection is configured. An inert wrong value
+        # is still a wrong value, and this matches `DetectorArray`, which
+        # validates its whole receiver configuration at construction.
+        validate_gate_model(self.gate_model)
+        if not callable(getattr(self.click_resolver, "resolve", None)):
+            raise TypeError("click_resolver must provide resolve(...)")
+        if type(self.detection_window_ticks) is not int:
+            raise TypeError("detection_window_ticks must be int")
+        if self.detection_window_ticks <= 0:
+            raise ValueError("detection_window_ticks must be positive")
 
         # Ports are built directly rather than through
         # `sources/_common.quantum_output_port`, which is private to the sources
@@ -499,6 +650,30 @@ class DelayInterferometer(Component):
             PortKind.CLASSICAL,
             PortDirection.EGRESS,
         )
+        self.detection_port = self._port(
+            PORT_DETECTION,
+            PortKind.CLASSICAL,
+            PortDirection.EGRESS,
+        )
+
+    def _resolve_detectors(self) -> Optional[tuple[SinglePhotonDetector, ...]]:
+        """Validate the detector pair, or pass ``None`` through untouched."""
+        if self.detectors is None:
+            return None
+
+        normalized = normalize_detectors(self.detectors, require_non_empty=True)
+
+        if len(normalized) != 2:
+            raise ValueError(
+                f"delay interferometer {self.device_id!r} takes exactly two "
+                f"detectors and got {len(normalized)}: BS2 has two output ports "
+                "and each needs its own channel, index 0 reading "
+                f"{PORT_OUT_0!r} and index 1 reading {PORT_OUT_1!r}; pass "
+                "detectors=None for an optics-only device that emits pulses and "
+                "decides no clicks"
+            )
+
+        return normalized
 
     def _resolve_delay(self) -> int:
         """Resolve tau to a whole number of ticks, at least one."""
@@ -554,7 +729,7 @@ class DelayInterferometer(Component):
         return 0 if self._held is None else 1
 
     def bind(self, context: BindingContext) -> None:
-        """Bind to a timeline. No RNG streams are declared.
+        """Bind to a timeline, declaring streams only if detectors are fitted.
 
         Parameters
         ----------
@@ -570,11 +745,24 @@ class DelayInterferometer(Component):
 
         Notes
         -----
-        Binding is idempotent for the same timeline. The component is ideal, so
-        there is nothing to sample; a declared-but-never-consumed stream would be
-        dead configuration and a lie in the binding log. Because stream values
-        derive from the stream path rather than from creation order, adding one
-        in a later revision cannot perturb any other component's draws.
+        Binding is idempotent for the same timeline.
+
+        **The optics declare nothing.** BS1, the delay and BS2 are ideal by
+        specification, so at ``detectors=None`` this component still requests no
+        stream at all; a declared-but-never-consumed stream would be dead
+        configuration and a lie in the binding log.
+
+        With detectors fitted the sampling is theirs, not the optics'. Four
+        streams per channel come from ``bind_detector_rngs`` on the four-segment
+        path ``(device_id, "delay_interferometer", detector_id, role)`` -- the
+        detector id is the segment that stops two identical channels sharing --
+        plus one ``"resolver"`` stream, which only a ``"random"`` double-click
+        policy ever draws from. They are declared eagerly because
+        ``Timeline.rng`` refuses a new stream once execution has begun.
+
+        Because stream values derive from the stream path rather than from
+        creation order or stream count, fitting detectors cannot perturb any
+        other component's draws.
         """
         if not isinstance(context, BindingContext):
             raise TypeError("context must be BindingContext")
@@ -589,6 +777,19 @@ class DelayInterferometer(Component):
                 )
             return
 
+        if self.detectors is not None:
+            self._detector_rngs = bind_detector_rngs(
+                timeline=timeline,
+                device_id=self.device_id,
+                namespace=COMPONENT_KEY,
+                detectors=tuple(self.detectors),
+            )
+            self._resolver_rng = timeline.rng(
+                self.device_id,
+                COMPONENT_KEY,
+                "resolver",
+            )
+
         self._bound_timeline_id = timeline_id
         timeline.log(
             LogLevel.INFO,
@@ -598,7 +799,11 @@ class DelayInterferometer(Component):
                 "device_id": self.device_id,
                 "delay_ticks": self._resolved_delay_ticks,
                 "delay_s": ticks_to_seconds(self._resolved_delay_ticks),
+                "short_delay_ticks": self.short_delay_ticks,
                 "flush_priority": self.flush_priority,
+                "detector_count": (
+                    0 if self.detectors is None else len(self.detectors)
+                ),
             },
         )
 
@@ -694,9 +899,15 @@ class DelayInterferometer(Component):
         pulse_index = _incoming_pulse_index(signal)
         short_state, long_state = split_50_50(incoming)
 
+        # Both arms take the common transit; only the long arm also takes tau.
+        # Every difference the physics depends on is therefore tau alone, and a
+        # short_delay_ticks of 0 reproduces an instantaneous short arm exactly.
+        short_bs2_tick = arrival_tick + self.short_delay_ticks
+        long_bs2_tick = short_bs2_tick + self._resolved_delay_ticks
+
         short = ArmContribution(
             state=short_state,
-            bs2_tick=arrival_tick,
+            bs2_tick=short_bs2_tick,
             sigma_s=sigma_s,
             wavelength_nm=float(signal.wavelength_nm),
             pulse_index=pulse_index,
@@ -710,7 +921,11 @@ class DelayInterferometer(Component):
         held, self._held = self._held, None
         partner = vacuum_like(short) if held is None else held.arm
 
-        if partner.bs2_tick <= arrival_tick:
+        # BS2 acts when the *later* arm gets there, which at
+        # short_delay_ticks == 0 is the held arm and nothing else.
+        resolve_tick = max(short.bs2_tick, partner.bs2_tick)
+
+        if resolve_tick <= arrival_tick:
             self._resolve(
                 timeline,
                 short=short,
@@ -719,14 +934,14 @@ class DelayInterferometer(Component):
                 action=action,
             )
         else:
-            self._defer(timeline, short=short, long_=partner)
+            self._defer(timeline, short=short, long_=partner, at_tick=resolve_tick)
 
         self._hold_counter += 1
         self._held = HeldLongArm(
             hold_id=self._hold_counter,
             arm=ArmContribution(
                 state=long_state,
-                bs2_tick=arrival_tick + self._resolved_delay_ticks,
+                bs2_tick=long_bs2_tick,
                 sigma_s=sigma_s,
                 wavelength_nm=float(signal.wavelength_nm),
                 pulse_index=pulse_index,
@@ -784,12 +999,13 @@ class DelayInterferometer(Component):
         *,
         short: ArmContribution,
         long_: ArmContribution,
+        at_tick: int,
     ) -> None:
-        """Schedule a combination whose long arm has not reached BS2 yet.
+        """Schedule a combination whose arms have not both reached BS2 yet.
 
-        Only reached when ``long_.bs2_tick > timeline.current_time`` strictly, so
-        this is never a delay-0 self-schedule -- see the class notes for why that
-        matters.
+        ``at_tick`` is the later of the two BS2 ticks. Only reached when it
+        exceeds ``timeline.current_time`` strictly, so this is never a delay-0
+        self-schedule -- see the class notes for why that matters.
 
         No log record of its own. The scheduled event carries both signal ids and
         both BS2 ticks in its own ``meta``, and an event trace already shows it
@@ -799,7 +1015,7 @@ class DelayInterferometer(Component):
         """
         timeline.schedule(
             Event(
-                time=long_.bs2_tick,
+                time=at_tick,
                 priority=0,
                 target_ref=self,
                 action=ACTION_RESOLVE_BS2,
@@ -978,6 +1194,19 @@ class DelayInterferometer(Component):
             ),
         )
 
+        self._detect(
+            timeline,
+            short=short,
+            long_=long_,
+            out_0=out_0,
+            out_1=out_1,
+            overlap=overlap,
+            index=index,
+            signal_ids=(str(signal_0.id), str(signal_1.id)),
+            event_id=event_id,
+            action=action,
+        )
+
         for connection, signal in (
             (connection_0, signal_0),
             (connection_1, signal_1),
@@ -995,6 +1224,177 @@ class DelayInterferometer(Component):
                     "interference_index": index,
                 },
             )
+
+    def _detect(
+        self,
+        timeline: Timeline,
+        *,
+        short: ArmContribution,
+        long_: ArmContribution,
+        out_0: CoherentState,
+        out_1: CoherentState,
+        overlap: float,
+        index: int,
+        signal_ids: tuple[str, str],
+        event_id: Optional[int],
+        action: str,
+    ) -> None:
+        """Turn the two BS2 amplitudes into one slot decision.
+
+        Notes
+        -----
+        **Both ports are evaluated independently, and that is the point.** Each
+        gets its own Bernoulli trial against its own
+        :math:`1 - e^{-\\eta_d\\mu_k}`, so a slot with
+        :math:`\\mu_0 = 0.19` and :math:`\\mu_1 = 0.01` clicks on port 0 about
+        17% of the time, on port 1 about 1%, and on both about 0.17% of the
+        time. That last number is a genuine double click, present at every
+        :math:`\\mu`, and what the slot then *reports* is the resolver's
+        double-click policy rather than physics.
+
+        **The detector's efficiency is applied once.**
+        ``click_probability`` is handed ``params.efficiency`` and returns a
+        probability with it already in the exponent;
+        ``signal_click_probability`` then *replaces* that efficiency inside the
+        detector rather than multiplying it. Dark counts and afterpulses still
+        read ``params`` on their own paths, which is why the override is of one
+        term and not of the parameter record.
+
+        **Vacuum slots are not special-cased.** The first pulse's short arm and
+        the flushed long arm each meet vacuum and split ``mu/2`` both ways, so
+        both ports carry equal probability and the slot cannot hold a bit. It is
+        an ordinary pulse to a detector and gets an ordinary report; dropping it
+        is the agent's job, on the ``None`` pulse index in the report metadata.
+        """
+        detectors = self.detectors
+        if detectors is None:
+            return
+
+        time = timeline.current_time
+
+        exposures = tuple(
+            DetectorExposure(
+                detector_id=detector.detector_id,
+                signal_present=True,
+                outcome_label=port_name,
+                signal_click_probability=click_probability(
+                    state.mean_photon_number,
+                    efficiency=detector.params.efficiency,
+                ),
+            )
+            for detector, port_name, state in (
+                (detectors[0], PORT_OUT_0, out_0),
+                (detectors[1], PORT_OUT_1, out_1),
+            )
+        )
+
+        raw_clicks, detection_complete_time = evaluate_detector_windows(
+            device_id=self.device_id,
+            time=time,
+            detectors=tuple(detectors),
+            exposures=exposures,
+            detector_rngs=self._detector_rngs,
+            detection_window_ticks=self.detection_window_ticks,
+            gate_model=self.gate_model,
+            # No measurement was run and none could be: a threshold detector
+            # reads intensity and there is no basis to name.
+            measurement_label=None,
+            fallback_complete_time=time,
+        )
+
+        report = self.click_resolver.resolve(
+            device_id=self.device_id,
+            time=time,
+            # Two signals left BS2 and neither is "the" measured one, so the
+            # report carries no signal id and joins to the InterferenceReport on
+            # `interference_index` instead.
+            signal=None,
+            qstate_result=None,
+            measurement_call=None,
+            raw_clicks=raw_clicks,
+            rng=self._resolver_rng,
+        )
+
+        report = replace(
+            report,
+            meta=report.meta
+            + (
+                ("interference_index", index),
+                ("short_pulse_index", short.pulse_index),
+                ("long_pulse_index", long_.pulse_index),
+                ("temporal_overlap", overlap),
+                ("mean_photon_number_0", out_0.mean_photon_number),
+                ("mean_photon_number_1", out_1.mean_photon_number),
+                # Derived floats, never the raw alpha: the JSONL sink has no
+                # complex case and would fall back to repr().
+                ("phase_rad_0", out_0.phase_rad),
+                ("phase_rad_1", out_1.phase_rad),
+                ("output_signal_ids", signal_ids),
+            ),
+        )
+
+        self._store_detection_report(
+            timeline,
+            report=report,
+            fallback_time=detection_complete_time,
+            event_id=event_id,
+            action=action,
+        )
+
+    def _store_detection_report(
+        self,
+        timeline: Timeline,
+        *,
+        report: DetectionReport,
+        fallback_time: int,
+        event_id: Optional[int],
+        action: str,
+    ) -> None:
+        """Record one slot decision and emit it when the port is wired.
+
+        Follows ``DetectorArray._store_report`` and its emission timing: a
+        report is ready at the latest raw click it contains, or at the
+        detector-window completion tick when it contains none.
+        """
+        self.detection_reports.append(report)
+
+        timeline.log(
+            LogLevel.DEBUG if report.success else LogLevel.TRACE,
+            "components.interferometers.delay_interferometer.detected",
+            "slot detected",
+            event_id=event_id,
+            action=action,
+            meta={
+                "device_id": self.device_id,
+                "report_id": report.report_id,
+                "success": report.success,
+                "outcome": report.outcome,
+                "click_count": len(report.raw_clicks),
+                "flags": report.flags,
+                **dict(report.meta),
+            },
+        )
+
+        connection = self.detection_port.connection
+        if connection is None:
+            return
+
+        connection.transmit(
+            report,
+            timeline,
+            time=max(
+                timeline.current_time,
+                _report_ready_time(report=report, fallback_time=fallback_time),
+            ),
+            source=self,
+            subsystem_id="components",
+            meta={
+                "device_id": self.device_id,
+                "output_port": self.detection_port.name,
+                "report_id": report.report_id,
+                "report_kind": "detection",
+            },
+        )
 
     def _make_output_signal(
         self,

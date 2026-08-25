@@ -123,6 +123,12 @@ def _build(*, delay_ticks: int = TAU_TICKS, connect_outputs: bool = True, **kwar
     driver = _PulseDriver()
     device = DelayInterferometer(
         device_id="bob_di",
+        # Optics only, said out loud. Every assertion in this file is about
+        # exact amplitudes, energy to fifteen decimals, and exact ticks; behind
+        # a detector each becomes a statistical claim needing a seed sweep,
+        # which is a strictly weaker test of the same physics. Detection has its
+        # own file.
+        detectors=kwargs.pop("detectors", None),
         delay_ticks=delay_ticks,
         **kwargs,
     )
@@ -162,7 +168,11 @@ def _run_train(phases, *, num_slots: int = 5, seed: int = 1):
         encoding_phase=PhaseSequence(phases, repeat=True),
         temporal_mode_sigma_s=SIGMA_S,
     )
-    device = DelayInterferometer(device_id="bob_di", delay_ticks=TAU_TICKS)
+    device = DelayInterferometer(
+        device_id="bob_di",
+        detectors=None,
+        delay_ticks=TAU_TICKS,
+    )
     sink_0 = SignalSink(device_id="out0_sink")
     sink_1 = SignalSink(device_id="out1_sink")
 
@@ -441,7 +451,7 @@ def test_the_device_rejects_what_it_cannot_interfere(kwargs, expected) -> None:
 )
 def test_construction_requires_exactly_one_delay_of_at_least_one_tick(kwargs) -> None:
     with pytest.raises(ValueError):
-        DelayInterferometer(device_id="bob_di", **kwargs)
+        DelayInterferometer(device_id="bob_di", detectors=None, **kwargs)
 
 
 def test_both_output_ports_must_be_connected() -> None:
@@ -456,7 +466,11 @@ def test_both_output_ports_must_be_connected() -> None:
 
 
 def test_execution_is_rejected_before_binding_and_for_bad_events() -> None:
-    device = DelayInterferometer(device_id="bob_di", delay_ticks=TAU_TICKS)
+    device = DelayInterferometer(
+        device_id="bob_di",
+        detectors=None,
+        delay_ticks=TAU_TICKS,
+    )
     timeline = Timeline(master_seed=1)
 
     unbound = Event(

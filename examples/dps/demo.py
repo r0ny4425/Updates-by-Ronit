@@ -1,12 +1,21 @@
-"""Runnable DPS-QKD example: transmitter, fibre, and receiver optics.
+"""Runnable DPS-QKD example: transmitter, fibre, and detecting receiver.
 
 Alice's weak coherent pulse source, a quantum channel, and Bob's delay
-interferometer, running on a real timeline. Alice's differential bits come from
-her preparation reports; Bob's come from which interferometer output port is
-bright. The default run is lossless and noiseless, so they agree exactly.
+interferometer with a detector on each output arm, running on a real timeline.
+Alice's differential bits come from her preparation reports; Bob's come from
+which port actually clicked.
 
-Two flags turn the physics on. ``--channel-attenuation-db-per-km`` costs signal
-and no key; ``--channel-phase-noise-rad`` costs key.
+Four flags turn imperfections on, and each degrades the key in its own way:
+
+- ``--channel-attenuation-db-per-km`` costs clicks and **not** QBER. Both
+  interferometer arms are split from the same attenuated pulse, so loss scales
+  them together and never moves the light to the wrong port.
+- ``--channel-phase-noise-rad`` costs QBER and **not** clicks. A phase shift
+  redistributes light between the two ports without destroying any, so the same
+  number of slots click and more of them click on the wrong side.
+- ``--dark-count-rate-hz`` costs QBER and *adds* clicks: a dark count fires a
+  port the light did not.
+- ``--detector-efficiency`` costs clicks alone, like loss.
 """
 
 from __future__ import annotations
@@ -69,6 +78,29 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--detector-efficiency",
+        type=float,
+        default=None,
+        help=(
+            "quantum efficiency of both detectors (default 0.6). NOT the "
+            "probability of a click: for a coherent pulse that is "
+            "1 - exp(-eta*mu), so even 1.0 leaves a bright port silent on most "
+            "slots at mu=0.2, because most pulses carry no photon at all. "
+            "Lowering it costs clicks and leaves the QBER alone."
+        ),
+    )
+    parser.add_argument(
+        "--dark-count-rate-hz",
+        type=float,
+        default=None,
+        help=(
+            "dark counts per second per detector (default 100.0, which is "
+            "5e-8 per slot and invisible). A dark count fires a port the light "
+            "did not, so unlike loss it produces a *wrong* bit rather than a "
+            "missing one. Try 1e8 to put a visible floor under the QBER."
+        ),
+    )
+    parser.add_argument(
         "--show-pulses",
         type=int,
         default=8,
@@ -87,6 +119,36 @@ def parse_args() -> argparse.Namespace:
         help="optional JSON report path",
     )
     return parser.parse_args()
+
+
+def _print_key_summary(trial: dict) -> None:
+    """Print the slot ledger and the two numbers a QKD run is judged on."""
+    slots = trial["interference_slots"]
+
+    def share(count: int) -> str:
+        return f"{count:>6}  ({count / slots:6.2%})" if slots else f"{count:>6}"
+
+    qber = trial["qber"]
+    print()
+    print("receiver")
+    print(f"  pulses sent          {trial['pulses_emitted']:>6}")
+    print(f"  interference slots   {slots:>6}")
+    print(f"  edge slots dropped   {share(trial['edge_slots_dropped'])}")
+    print(f"  slots with a click   {share(trial['slots_with_click'])}")
+    print(f"  slots with no click  {share(trial['slots_no_click'])}")
+    print(f"  double-click slots   {share(trial['slots_double_click'])}")
+    print()
+    print(f"  sifted bits          {trial['sifted_bits']:>6}")
+    print(f"  sifted errors        {trial['sifted_errors']:>6}")
+    print(
+        "  QBER                 "
+        + ("     -" if qber is None else f"{qber:6.2%}")
+        + "   (Alice's bit vs Bob's, over the sifted set)"
+    )
+    print(
+        f"  clicks per pulse     {trial['clicks_per_pulse']:>6.4f}"
+        "   (end to end: source -> fibre -> optics -> detector)"
+    )
 
 
 def _print_pulse_table(trial: dict, limit: int) -> None:
@@ -131,10 +193,13 @@ def main() -> None:
         randomize_carrier_phase=args.randomize_carrier_phase,
         channel_attenuation_db_per_km=args.channel_attenuation_db_per_km,
         channel_phase_noise_rad=args.channel_phase_noise_rad,
+        detector_efficiency=args.detector_efficiency,
+        dark_count_rate_hz=args.dark_count_rate_hz,
         log_file=args.log_file,
     )
 
     print(summarize_trial(trial))
+    _print_key_summary(trial)
 
     if args.show_pulses:
         _print_pulse_table(trial, args.show_pulses)

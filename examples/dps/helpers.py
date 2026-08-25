@@ -89,9 +89,12 @@ def dps_phase_histogram(indices: Sequence[int]) -> tuple[int, ...]:
 
 
 __all__ = [
+    "dps_detected_bit",
     "dps_differential_bit",
     "dps_differential_bits",
+    "dps_optical_differential_bits",
     "dps_phase_histogram",
+    "dps_slot_arms",
     "dps_slot_period_ticks",
     "dps_source_duration_s",
 ]
@@ -138,3 +141,81 @@ def dps_optical_differential_bits(
         for report in reports
         if report.short_pulse_index is not None and report.long_pulse_index is not None
     )
+
+
+def dps_detected_bit(outcome: object) -> int:
+    """Decode one DPS bit from the port label a detector click carries.
+
+    Parameters
+    ----------
+    outcome : object
+        ``DetectionReport.outcome``, which for this receiver is the name of the
+        output port whose detector fired -- ``"out_0"`` or ``"out_1"``.
+
+    Returns
+    -------
+    int
+        ``1`` for ``"out_0"``, ``0`` for ``"out_1"``.
+
+    Raises
+    ------
+    ValueError
+        If `outcome` is anything else, including ``None``. A no-click or
+        discarded slot has no bit and must be filtered out before reaching
+        here, not mapped to a default.
+
+    Notes
+    -----
+    **This replaces an intensity comparison with a click.** The convention is
+    the same one :func:`dps_optical_differential_bits` reads off ``mu``: equal
+    phases interfere constructively at port 1 and give bit ``0``, a ``pi`` step
+    moves the light to port 0 and gives bit ``1``. What changed is who decides
+    -- a detector firing rather than ``mu_0 > mu_1`` -- and that a detector can
+    now decline to decide at all.
+
+    The port names come from ``components.interferometers``. They are compared
+    as strings rather than imported so this helper stays a pure function of a
+    report field, but the two must agree; a test pins them against the
+    constants.
+    """
+    if outcome == "out_0":
+        return 1
+    if outcome == "out_1":
+        return 0
+    raise ValueError(
+        f"DPS bit needs a port label of 'out_0' or 'out_1', got {outcome!r}: a "
+        "slot with no click or a discarded double click carries no bit and "
+        "must be counted, not decoded"
+    )
+
+
+def dps_slot_arms(report: object) -> tuple[int | None, int | None]:
+    """Return ``(long_pulse_index, short_pulse_index)`` for a detection slot.
+
+    Parameters
+    ----------
+    report : DetectionReport
+        One slot decision from the interferometer's detection port.
+
+    Returns
+    -------
+    tuple[int or None, int or None]
+        The source pulse indices of the two arms that met at BS2, **previous
+        first**. ``None`` means that arm was vacuum.
+
+    Notes
+    -----
+    Order matters and is not the metadata order. The *long* arm carries the
+    earlier pulse, held across the delay; the *short* arm carries the pulse that
+    just arrived. So the pair reads ``(previous, current)``, which is the
+    argument order :func:`dps_differential_bit` expects. Swapping them is
+    invisible for a two-phase alphabet -- ``a ^ b == b ^ a`` -- and would not
+    stay invisible for a four-phase one.
+
+    A ``None`` in either position marks an edge slot: the first pulse's short
+    arm and the flushed last long arm each met vacuum, so both ports carry equal
+    light and the slot cannot hold a bit. Those are ordinary reports and are
+    dropped by the receiver, not special-cased by the interferometer.
+    """
+    meta = dict(report.meta)
+    return meta["long_pulse_index"], meta["short_pulse_index"]

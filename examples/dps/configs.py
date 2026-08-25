@@ -74,6 +74,57 @@ class DPSReceiverConfig:
 
 
 @dataclass(frozen=True)
+class DPSDetectorConfig:
+    """Settings for the two detectors inside Bob's interferometer.
+
+    One per output port: index 0 reads ``out_0``, index 1 reads ``out_1``. They
+    live inside the interferometer rather than downstream because a DPS receiver
+    is one physical unit, and because BS2 produces both amplitudes in one call --
+    so one slot decision follows with no arrival buffering.
+
+    **Detector efficiency is not the probability of a click.** For a coherent
+    pulse the click probability is ``1 - exp(-eta * mu)``, so at the default
+    ``eta = 0.6`` and ``mu = 0.2`` a bright port fires on about 11% of slots and
+    a *perfect* detector would still only reach 18%. Most pulses contain no
+    photon at all. Raising ``efficiency`` towards 1.0 does not approach
+    certainty; raising ``mu`` does, at the cost of the multi-photon security
+    that decoy states exist to restore.
+    """
+
+    # A good InGaAs APD or a modest SNSPD at 1550 nm.
+    efficiency: float = 0.6
+
+    # Dark counts per second per detector. With the 500 ps window below this is
+    # 5e-8 events per slot per detector, which is why a default run measures a
+    # QBER of exactly zero rather than a small one. `demo.py` exposes the knob
+    # so the effect can be made visible.
+    dark_count_rate_hz: float = 100.0
+
+    # 10 ns, not BB84's 50 ns. BB84 runs a 100 MHz source, where 50 ns is five
+    # slots; DPS runs at 1 GHz, where it would be fifty and would swallow most
+    # of the train. 10 ns is a fast SNSPD and still costs real slots at this
+    # clock -- the summary reports how many, because it is physics, not a knob
+    # chosen to make a number look good.
+    dead_time_s: float = 10e-9
+
+    jitter_stddev_s: float = 50e-12
+
+    p_afterpulse: float = 0.001
+    afterpulse_decay_s: float = 100e-9
+
+    # Half a slot at 1 GHz, so one slot's window cannot reach into the next.
+    detection_window_s: float = 500e-12
+
+    # What a slot reports when both ports fire. "fail" discards it: both
+    # detectors seeing light means the interferometer said nothing, and a
+    # discarded slot is honest where a guess is not. "random" is the BB84
+    # choice and would instead assign a bit that is wrong half the time,
+    # feeding a real error rate into the QBER. The rate itself is physics and
+    # belongs to the two ports; only this response is protocol.
+    double_click_policy: str = "fail"
+
+
+@dataclass(frozen=True)
 class DPSChannelConfig:
     """Settings for the fibre between Alice and Bob.
 

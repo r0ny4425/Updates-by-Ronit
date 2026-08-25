@@ -238,10 +238,15 @@ def test_phase_noise_degrades_the_bit_agreement() -> None:
     assert sum(heavy) / len(heavy) < 0.95
 
     # At 0.2 rad it is not broken at all, on any seed, and that is a real
-    # property rather than a weak threshold: Bob's bit here is `mu_0 > mu_1`,
-    # a noiseless threshold at the midpoint, so a differential phase error only
-    # flips a bit once it exceeds pi/2. Visibility degrades continuously long
-    # before the bit does. A detector would smear this -- there isn't one yet,
-    # which is precisely what makes the distinction worth pinning.
+    # property rather than a weak threshold: the bits compared here are the
+    # *ideal* readout, `mu_0 > mu_1`, a noiseless threshold at the midpoint, so
+    # a differential phase error only flips a bit once it exceeds pi/2.
+    # Visibility degrades continuously long before the bit does.
+    #
+    # The detectors do smear this, and that is the point of keeping both
+    # readouts: a detector samples the *ratio* of the two intensities rather
+    # than thresholding it, so at 0.2 rad the detected QBER is already non-zero
+    # while this ideal comparison is still perfect. The detected version of this
+    # claim lives with the detection tests; this one pins the optics underneath.
     light = [agreement(0.2, seed) for seed in seeds]
     assert min(light) == 1.0

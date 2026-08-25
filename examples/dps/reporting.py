@@ -14,6 +14,21 @@ SUMMARY_KEYS = (
     "qstate_records",
     "differential_bits",
     "interference_slots",
+    # --- what the detectors decided ---------------------------------------
+    # These five partition every slot and sum to interference_slots.
+    "edge_slots_dropped",
+    "slots_with_click",
+    "slots_no_click",
+    "slots_double_click",
+    "sifted_bits",
+    "sifted_errors",
+    "qber",
+    "clicks_per_pulse",
+    "raw_clicks",
+    "detector_efficiency",
+    "dark_count_rate_hz",
+    # --- the ideal readout, kept as the reference the detector is judged
+    # against: same optics, no detector, no statistics.
     "optical_differential_bits",
     "optical_bits_match_alice",
     "interferometer_mu_in",
@@ -42,6 +57,8 @@ _RECORD_KEYS = (
     "arrival_ticks",
     "reports",
     "interference_reports",
+    "detection_reports",
+    "detection_slots_detail",
 )
 
 UNMODELLED_PHYSICS = (
@@ -55,13 +72,27 @@ UNMODELLED_PHYSICS = (
     "attenuation and an optional per-pulse phase noise, and both are off by "
     "default. Chromatic dispersion, polarization drift, correlated phase "
     "drift and any wavelength dependence are absent.",
-    "Detection. There is no optical detector, so both interferometer output "
-    "ports end at a tap. Bob's bits here are read from the interferometer's "
-    "own intensities, not from clicks; no photon-number statistics, detector "
-    "efficiency, dark counts or double clicks enter anywhere.",
-    "Interferometer non-idealities. It is ideal by specification: no "
-    "insertion loss, no arm imbalance, no splitting-ratio error, and no "
-    "thermal or mechanical drift of the arm lengths.",
+    "Photon arrival time within the pulse envelope. A click is timed at the "
+    "detection window's start plus jitter, never at a position sampled inside "
+    "the Gaussian the pulse occupies. Sub-slot timing resolution is therefore "
+    "not modelled; see CAPABILITY_MAP.md section 5 for the asymmetry in "
+    "SinglePhotonDetector that has to be fixed before it can be.",
+    "Polarization-resolved detection. A polarizing beamsplitter splits a weak "
+    "coherent pulse rather than routing it, and polarization_weights has not "
+    "shipped. This receiver reads phase, not polarization, so decoy-state "
+    "BB84 is still out of reach.",
+    "Photon-number resolution. Each port contributes at most one Bernoulli "
+    "trial per slot, so P(n >= 2 | click) is not modelled and a double click "
+    "here means two ports fired, never two photons in one port.",
+    "Interferometer non-idealities. Its optics are ideal by specification: "
+    "no insertion loss, no arm imbalance, no splitting-ratio error, and no "
+    "thermal or mechanical drift of the arm lengths. Its two detectors are "
+    "not ideal -- efficiency, dark counts, dead time, jitter and afterpulsing "
+    "are all modelled.",
+    "The protocol layer. There is no classical channel here and no agents: "
+    "Alice's bits are read from her own preparation reports in-process, not "
+    "learned from a message. Sifting over a public channel, error correction "
+    "and privacy amplification are step 6.",
 )
 
 

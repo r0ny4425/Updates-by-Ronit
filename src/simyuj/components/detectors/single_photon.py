@@ -92,6 +92,7 @@ class SinglePhotonDetector:
         signal_present: bool,
         window_duration_ticks: int,
         rngs: DetectorRNGStreams,
+        signal_click_probability: float | None = None,
         outcome_label: str | None = None,
         dark_count_policy: OnArrivalWindowDarkCounts | None = None,
         meta: tuple[tuple[str, object], ...] = (),
@@ -110,6 +111,9 @@ class SinglePhotonDetector:
         rngs : DetectorRNGStreams
             Deterministic RNG streams for efficiency, dark counts, jitter, and
             afterpulsing.
+        signal_click_probability : float or None, default=None
+            Probability of a signal click in this window, **replacing**
+            ``params.efficiency``. ``None`` uses that efficiency.
         outcome_label : str or None, default=None
             Logical label copied to emitted raw clicks.
         dark_count_policy : OnArrivalWindowDarkCounts or None, default=None
@@ -132,9 +136,23 @@ class SinglePhotonDetector:
         first accepted click; a photon-number-resolving detector may return
         multiple clicks that are not blocked by updated dead time.
 
-        Efficiency ``0.0`` and ``1.0`` avoid consuming the efficiency RNG.
-        Jitter is non-negative detector latency sampled from a normal
-        distribution and clamped at zero.
+        ``signal_click_probability`` **overrides** ``params.efficiency``; it
+        does not multiply it. It exists for a payload whose detection
+        probability is not a bare efficiency -- a coherent pulse, where
+        ``coherent_optics.click_probability`` returns ``1 - exp(-eta_d * mu)``
+        with this detector's own ``eta_d`` already inside the exponent.
+        Multiplying would apply ``eta_d`` twice and lower every click rate by
+        that factor with nothing raising, because a uniformly low rate is
+        indistinguishable from a lossier link. It governs the signal click
+        alone: dark counts and afterpulses read ``params`` on every path, which
+        is why this overrides one term rather than replacing the parameters.
+
+        Efficiency ``0.0`` and ``1.0`` avoid consuming the efficiency RNG, and
+        so do those two values supplied as ``signal_click_probability`` -- the
+        branch structure is identical either way, so threading a probability
+        through cannot shift a stream position that an efficiency would not
+        have shifted. Jitter is non-negative detector latency sampled from a
+        normal distribution and clamped at zero.
 
         Detector state is updated only when a click is accepted. Dark counts
         and afterpulses are still sampled when ``signal_present=False``; only
@@ -177,6 +195,7 @@ class SinglePhotonDetector:
         candidates = self._build_click_candidates(
             time=tick,
             signal_present=signal_present,
+            signal_click_probability=signal_click_probability,
             window_duration_ticks=window_duration_ticks,
             rngs=rngs,
             dark_count_policy=policy,
@@ -257,6 +276,7 @@ class SinglePhotonDetector:
         *,
         time: int,
         signal_present: bool,
+        signal_click_probability: float | None,
         window_duration_ticks: int,
         rngs: DetectorRNGStreams,
         dark_count_policy: OnArrivalWindowDarkCounts,
@@ -264,7 +284,9 @@ class SinglePhotonDetector:
         candidates: list[_ClickCandidate] = []
 
         if self._sample_signal_click(
-            signal_present=signal_present, rng=rngs.efficiency
+            signal_present=signal_present,
+            signal_click_probability=signal_click_probability,
+            rng=rngs.efficiency,
         ):
             candidates.append(
                 _ClickCandidate(
@@ -307,19 +329,32 @@ class SinglePhotonDetector:
 
         return candidates
 
-    def _sample_signal_click(self, *, signal_present: bool, rng) -> bool:
+    def _sample_signal_click(
+        self,
+        *,
+        signal_present: bool,
+        signal_click_probability: float | None,
+        rng,
+    ) -> bool:
         if not signal_present:
             return False
 
-        efficiency = float(self.params.efficiency)
+        # Override, never multiply. `params.efficiency` is already inside a
+        # supplied probability, so applying it again would divide every click
+        # rate by it -- silently, and plausibly. See `evaluate_window`.
+        probability = (
+            float(self.params.efficiency)
+            if signal_click_probability is None
+            else float(signal_click_probability)
+        )
 
-        if efficiency <= 0.0:
+        if probability <= 0.0:
             return False
 
-        if efficiency >= 1.0:
+        if probability >= 1.0:
             return True
 
-        return rng.random() < efficiency
+        return rng.random() < probability
 
     def _sample_dark_clicks(
         self,

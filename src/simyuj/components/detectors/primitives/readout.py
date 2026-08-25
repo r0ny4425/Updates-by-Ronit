@@ -12,7 +12,7 @@ from dataclasses import dataclass, field, replace
 from typing import Protocol, cast, runtime_checkable
 
 from simyuj.primitives.ids import ensure_nonempty_id
-from simyuj.primitives.validation import validate_bool
+from simyuj.primitives.validation import require_optional_probability, validate_bool
 from simyuj.qstate import QuantumStateManager, SubsystemId
 from simyuj.signal import Signal
 
@@ -44,6 +44,10 @@ class DetectorExposure:
         Non-negative offset from the component's base detection tick.
     meta : tuple[tuple[str, object], ...], default=()
         Metadata appended to raw clicks produced from this exposure.
+    signal_click_probability : float or None, default=None
+        Probability that the exposed signal produces a click, **replacing** the
+        detector's own ``params.efficiency`` for this exposure. ``None`` uses
+        that efficiency and is exactly today's behaviour.
 
     Notes
     -----
@@ -51,6 +55,21 @@ class DetectorExposure:
     dark counts from unexposed detectors report the detector's logical outcome.
     ``time_offset_ticks`` shifts the exposure start before gate clipping and
     detector-window evaluation.
+
+    **``signal_click_probability`` overrides ``params.efficiency``; it does not
+    multiply it.** The field exists for a payload whose detection probability is
+    not a bare efficiency -- a coherent pulse, where
+    ``coherent_optics.click_probability`` returns ``1 - exp(-eta_d * mu)`` with
+    the detector's own ``eta_d`` already inside the exponent. Multiplying would
+    apply ``eta_d`` twice and lower every click rate by that factor, silently:
+    at ``eta_d = 0.2`` a run yields a fifth of the clicks and nothing raises,
+    because the result looks exactly like a lossier link. The field name invites
+    the wrong reading, which is why it is stated here and again on
+    ``SinglePhotonDetector.evaluate_window``.
+
+    It governs the **signal** click alone. Dark counts and afterpulses keep
+    using ``params`` on every path, which is why this is an override of one
+    term rather than a replacement of the detector's parameters.
     """
 
     detector_id: str
@@ -58,6 +77,9 @@ class DetectorExposure:
     outcome_label: str | None = None
     time_offset_ticks: int = 0
     meta: tuple[tuple[str, object], ...] = ()
+    # Appended last so no existing keyword position moves and every current
+    # construction site keeps today's behaviour by taking the default.
+    signal_click_probability: float | None = None
 
     def __post_init__(self) -> None:
         ensure_nonempty_id(self.detector_id, field_name="detector_id")
@@ -74,6 +96,15 @@ class DetectorExposure:
             raise TypeError("time_offset_ticks must be int")
         if self.time_offset_ticks < 0:
             raise ValueError("time_offset_ticks must be non-negative")
+
+        object.__setattr__(
+            self,
+            "signal_click_probability",
+            require_optional_probability(
+                self.signal_click_probability,
+                field_name="signal_click_probability",
+            ),
+        )
 
         _validate_meta(self.meta)
 

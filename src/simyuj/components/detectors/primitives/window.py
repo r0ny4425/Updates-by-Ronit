@@ -263,6 +263,12 @@ def evaluate_detector_windows(
     dark counts may occur without a signal. The returned completion time is the
     latest evaluated active-window end, falling back to ``fallback_complete_time``
     when no active exposure extends it.
+
+    ``DetectorExposure.signal_click_probability`` is threaded through to the
+    detector unchanged and recorded in the click metadata. This helper does not
+    compute it, default it, or combine it with ``params.efficiency``; ``None``
+    means the detector uses its own efficiency. Whoever builds the exposures owns
+    that number.
     """
 
     if len(exposures) != len(detectors):
@@ -294,6 +300,7 @@ def evaluate_detector_windows(
             detector.evaluate_window(
                 time=exposure_time,
                 signal_present=exposure.signal_present,
+                signal_click_probability=exposure.signal_click_probability,
                 window_duration_ticks=exposure_window_duration_ticks,
                 rngs=require_detector_rngs(detector_rngs, detector),
                 outcome_label=exposure.outcome_label,
@@ -302,6 +309,10 @@ def evaluate_detector_windows(
                     ("detector_index", index),
                     ("measurement_label", measurement_label),
                     ("readout_signal_present", exposure.signal_present),
+                    (
+                        "readout_signal_click_probability",
+                        exposure.signal_click_probability,
+                    ),
                     ("readout_time_offset_ticks", exposure.time_offset_ticks),
                     ("readout_outcome_label", exposure.outcome_label),
                     ("window_duration_ticks", exposure_window_duration_ticks),

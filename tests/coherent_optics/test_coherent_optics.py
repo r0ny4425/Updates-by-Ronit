@@ -21,6 +21,7 @@ import pytest
 
 from simyuj.components.coherent_optics import (
     attenuated,
+    click_probability,
     gaussian_temporal_overlap,
     interfere,
     phase_shifted,
@@ -320,3 +321,54 @@ def test_interfere_names_the_arm_that_was_not_a_coherent_state() -> None:
         interfere(0.5 + 0j, arm)
     with pytest.raises(TypeError, match="long_arm must be CoherentState"):
         interfere(arm, 0.5 + 0j)
+
+
+# --------------------------------------------------------------------------
+# click_probability
+# --------------------------------------------------------------------------
+
+
+def test_click_probability_is_the_poisson_closed_form() -> None:
+    # Thinning Poisson(mu) by eta gives Poisson(eta*mu), so P(n >= 1) is
+    # 1 - exp(-eta*mu) exactly. Checked against the direct form rather than
+    # against hand-typed constants, so the identity is what is asserted.
+    for mu in (0.05, 0.2, 1.0, 7.5):
+        for eta in (0.15, 0.5, 1.0):
+            assert click_probability(mu, efficiency=eta) == pytest.approx(
+                1.0 - exp(-eta * mu),
+                abs=ATOL,
+            )
+
+
+def test_click_probability_is_zero_when_either_factor_is_zero() -> None:
+    # Coherent vacuum is a real pulse occupying its slot, and a blind detector
+    # is a real detector. Both give exactly zero with no branch.
+    assert click_probability(0.0, efficiency=0.9) == 0.0
+    assert click_probability(0.9, efficiency=0.0) == 0.0
+
+
+def test_click_probability_saturates_to_exactly_one_in_double_precision() -> None:
+    # Analytically P < 1 for every finite mu, but above eta*mu ~ 37 the gap is
+    # under the double epsilon. Pinned rather than worked around: a detector
+    # reading exactly 1.0 clicks without drawing from its efficiency stream, so
+    # where this saturates is where a later window's stream position changes.
+    assert click_probability(30.0, efficiency=1.0) < 1.0
+    assert click_probability(50.0, efficiency=1.0) == 1.0
+
+
+def test_click_probability_resolves_a_dark_port_without_a_special_case() -> None:
+    # An analytically dark port arrives at ~1e-33 -- the exp(1j*pi) residue,
+    # squared -- and total attenuation arrives at exactly 0.0. The closed form
+    # has to put both at the floor on its own, because the detector downstream
+    # has no branch for either.
+    residue = click_probability(1.5e-33, efficiency=0.2)
+    assert 0.0 <= residue < 1e-30
+    assert click_probability(0.0, efficiency=0.2) == 0.0
+
+
+def test_click_probability_keeps_its_digits_at_small_mu() -> None:
+    # expm1, not 1.0 - exp(-x). At eta*mu = 1e-17 the naive form returns exactly
+    # 0.0 and loses every significant digit to cancellation; this must not.
+    tiny = click_probability(1e-17, efficiency=1.0)
+    assert 1.0 - exp(-1e-17) == 0.0
+    assert tiny == pytest.approx(1e-17, rel=1e-9)

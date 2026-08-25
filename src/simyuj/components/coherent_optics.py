@@ -18,8 +18,8 @@ This module takes no RNG and returns no random value, which makes "nothing here
 samples a photon number" structural rather than a comment. Photon statistics are
 integrated in closed form at detection.
 
-Shipped when their first caller exists, not before: ``click_probability``,
-``polarization_weights``, ``rotated_polarization``.
+Shipped when their first caller exists, not before: ``polarization_weights``,
+``rotated_polarization``.
 
 Beamsplitter convention
 -----------------------
@@ -48,11 +48,12 @@ equations in :math:`\\operatorname{Re}` is internally inconsistent; the
 from __future__ import annotations
 
 import cmath
-from math import exp, isfinite, sqrt
+from math import exp, expm1, isfinite, sqrt
 
 from simyuj.primitives.coherent_state import CoherentState
 from simyuj.primitives.validation import (
     require_finite_real,
+    require_non_negative_real,
     require_positive_real,
     require_probability,
 )
@@ -478,8 +479,87 @@ def interfere(
     return outputs[0], outputs[1]
 
 
+def click_probability(mean_photon_number: float, *, efficiency: float) -> float:
+    """Return the probability that a threshold detector fires on one pulse.
+
+    Parameters
+    ----------
+    mean_photon_number : float
+        Non-negative :math:`\\mu` arriving in the detector's mode. ``0.0`` is
+        the coherent vacuum, which is a real pulse and not an absent one.
+    efficiency : float
+        Detector quantum efficiency :math:`\\eta_d` in ``[0, 1]``.
+
+    Returns
+    -------
+    float
+        :math:`P = 1 - e^{-\\eta_d \\mu}`, in ``[0, 1]``.
+
+    Raises
+    ------
+    TypeError
+        If either argument is not numeric, or is ``bool``.
+    ValueError
+        If `mean_photon_number` is negative, ``nan`` or infinite, or
+        `efficiency` is outside ``[0, 1]``.
+
+    Notes
+    -----
+    **Exact, not an approximation.** Thinning a :math:`\\mathrm{Poisson}(\\mu)`
+    photon number by a per-photon detection probability :math:`\\eta_d` gives
+    :math:`\\mathrm{Poisson}(\\eta_d\\mu)`, so the probability of detecting at
+    least one photon is :math:`1 - e^{-\\eta_d\\mu}` with no truncation and no
+    small-:math:`\\mu` assumption. This is the closed form of the photon-number
+    sampling the coherent source exists to avoid: one uniform draw against this
+    probability, never a photon count.
+
+    **:math:`\\eta_d` is already inside the exponent.** A caller that hands this
+    value to a detector must let it *replace* that detector's own efficiency, not
+    multiply it. Applying :math:`\\eta_d` twice lowers every click rate by that
+    factor, silently and plausibly -- at :math:`\\eta_d = 0.2` a run yields a
+    fifth of the clicks it should, nothing raises, and the result merely looks
+    like a lossier link, which is the quantity a QKD run is trying to measure.
+
+    Computed with ``expm1``, which is accurate where ``1.0 - exp(-x)`` loses
+    every significant digit to cancellation. ``DarkCountProcess.p_at_least_one``
+    is the same closed form over a dark rate and a window duration, and uses
+    ``expm1`` for the same reason.
+
+    **The ceiling is reached, and reaching it is not a bug.** The analytic
+    value is strictly below one, but above :math:`\\eta_d \\mu \\approx 37`
+    the difference falls under the double-precision epsilon and this returns
+    exactly ``1.0``. A detector reading that value clicks on every trial
+    without drawing from its efficiency stream, which is correct for a pulse
+    carrying tens of detectable photons -- and, because the draw is skipped,
+    something a later window's stream position depends on.
+
+    **The two floors need no special case.** An analytically dark interferometer
+    port delivers :math:`\\mu \\approx 10^{-33}` -- the ``exp(1j*pi)`` residue,
+    squared -- and total upstream attenuation delivers exactly ``0.0``. Both give
+    a probability at or indistinguishable from zero here, so "no click" comes out
+    of the detector's own statistics rather than out of a branch.
+
+    Examples
+    --------
+    >>> round(click_probability(0.0, efficiency=0.2), 12)
+    0.0
+    >>> round(click_probability(0.2, efficiency=1.0), 12)
+    0.181269246922
+    >>> round(click_probability(1e-33, efficiency=0.2), 12)
+    0.0
+    """
+    mu = require_non_negative_real(
+        mean_photon_number,
+        field_name="mean_photon_number",
+        type_name="numeric",
+    )
+    eta = require_probability(efficiency, field_name="efficiency")
+    return -expm1(-eta * mu)
+
+
 __all__ = [
     "attenuated",
+    "click_probability",
     "gaussian_temporal_overlap",
     "interfere",
     "phase_shifted",

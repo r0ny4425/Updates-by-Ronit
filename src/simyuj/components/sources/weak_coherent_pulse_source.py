@@ -208,14 +208,6 @@ class WeakCoherentPulseSource(Component):
     additionally carries one ``state_ref`` and one
     ``SubsystemHandle(kind="mode")`` describing the occupied mode.
 
-    ``Signal.polarization`` is left ``None`` in **both** cases, deliberately.
-    That field and a ``"mode"`` qstate record describe the same physical thing,
-    and only one of them can stay true: ``QuantumChannel`` applies ``Kraus``
-    noise to the record, and a depolarized mode has no Jones vector to write
-    back. A signal carrying both would hand a detector the *prepared* state
-    while the *arrived* state sat in qstate -- plausible numbers, silently
-    wrong. The record is authoritative; read the mode through ``state_ref``.
-
     Signal metadata carries identity only -- ``source_device_id`` and
     ``pulse_index``. The preparation choices are deliberately **not** put there:
     they travel in ``CoherentPulsePreparationReport`` on the local control
@@ -669,10 +661,6 @@ class WeakCoherentPulseSource(Component):
             state_ref=state_ref,
             state_targets=state_targets,
             coherent_state=coherent_state,
-            # Signal.polarization is deliberately left at its None default even
-            # when a mode was prepared. It and the qstate record are the same
-            # physical quantity, and only the record survives channel noise --
-            # see the class Notes.
             temporal_mode_sigma_s=self.temporal_mode_sigma_s,
             # Identity only. The preparation choices stay on the control plane.
             meta=(

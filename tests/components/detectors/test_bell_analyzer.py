@@ -131,7 +131,6 @@ def _polarized_pulse_signal(timeline: Timeline) -> Signal:
             ),
         ),
         coherent_state=CoherentState.from_mean_photon_number(0.1),
-        polarization=(1 + 0j, 0j),
         temporal_mode_sigma_s=1e-11,
     )
 

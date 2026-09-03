@@ -9,7 +9,6 @@ property that makes that impossible, not merely that today's fields survive.
 
 from __future__ import annotations
 
-import math
 from dataclasses import fields
 
 import pytest
@@ -17,9 +16,6 @@ import pytest
 from simyuj.primitives.coherent_state import CoherentState
 from simyuj.signal import EncodingScheme, Signal, SignalKind
 from simyuj.signal.signal import _KEEP, _SIGNAL_FIELD_NAMES
-
-H = (1.0 + 0j, 0j)
-D = (complex(2**-0.5), complex(2**-0.5))
 
 
 def _signal(**overrides: object) -> Signal:
@@ -35,19 +31,17 @@ def _signal(**overrides: object) -> Signal:
 
 
 class TestDefaults:
-    def test_all_three_default_to_none(self) -> None:
+    def test_both_default_to_none(self) -> None:
         signal = _signal()
         assert signal.coherent_state is None
         assert signal.temporal_mode_sigma_s is None
-        assert signal.polarization is None
 
     def test_optical_fields_are_appended_last(self) -> None:
         # Appended rather than grouped with wavelength_nm, so that "does any
         # call site construct Signal positionally?" stays unanswerable.
-        assert _SIGNAL_FIELD_NAMES[-3:] == (
+        assert _SIGNAL_FIELD_NAMES[-2:] == (
             "coherent_state",
             "temporal_mode_sigma_s",
-            "polarization",
         )
 
 
@@ -81,41 +75,15 @@ class TestTemporalModeSigma:
         assert signal.temporal_mode_sigma_s == 4e-13
 
 
-class TestPolarization:
-    def test_accepts_normalized_real_components(self) -> None:
-        assert _signal(polarization=H).polarization == (1 + 0j, 0j)
-
-    def test_converts_components_to_complex(self) -> None:
-        polarization = _signal(polarization=(1.0, 0.0)).polarization
-        assert polarization is not None
-        assert all(isinstance(component, complex) for component in polarization)
-
-    def test_accepts_a_diagonal_state(self) -> None:
-        assert _signal(polarization=D).polarization == D
-
-    def test_rejects_unnormalized(self) -> None:
-        with pytest.raises(ValueError, match="normalized"):
-            _signal(polarization=(1.0 + 0j, 1.0 + 0j))
-
-    def test_rejects_wrong_length(self) -> None:
-        with pytest.raises(ValueError, match="exactly two"):
-            _signal(polarization=(1.0 + 0j,))
-
-    def test_rejects_bool_components(self) -> None:
-        with pytest.raises(TypeError):
-            _signal(polarization=(True, False))
-
-
 class TestValidationFlagFastPath:
     def test_skips_the_new_checks(self) -> None:
         # The emission hot path builds trusted signals with validation off; the
         # new fields must not reintroduce a cost there.
         signal = _signal(
-            polarization=(9.0 + 0j, 9.0 + 0j),
             temporal_mode_sigma_s=-1.0,
             validation_flag=False,
         )
-        assert signal.polarization == (9.0 + 0j, 9.0 + 0j)
+        assert signal.temporal_mode_sigma_s == -1.0
 
 
 class TestDerivedCompleteness:
@@ -138,7 +106,6 @@ class TestDerivedCompleteness:
             timing_meta=(("emission_slot_tick", 7),),
             coherent_state=CoherentState.from_mean_photon_number(0.2),
             temporal_mode_sigma_s=1e-11,
-            polarization=D,
         )
         copy = distinct._derived()
 
@@ -152,7 +119,6 @@ class TestDerivedCompleteness:
         signal = _signal(
             coherent_state=state,
             temporal_mode_sigma_s=1e-11,
-            polarization=H,
         )
         annotated = signal._with_metadata(
             meta=(("quantum_channel_id", "fiber"),),
@@ -161,7 +127,6 @@ class TestDerivedCompleteness:
 
         assert annotated.coherent_state is state
         assert annotated.temporal_mode_sigma_s == 1e-11
-        assert annotated.polarization == H
         assert annotated.meta == (("quantum_channel_id", "fiber"),)
         assert annotated.timing_meta == (("channel_arrival_time", 12),)
 
@@ -212,15 +177,3 @@ class TestOpticalAndQstatePayloadsCoexist:
         )
         assert signal.state_ref == 3
         assert signal.coherent_state is not None
-
-
-def test_polarization_norm_tolerance_is_tight_enough_to_catch_real_errors() -> None:
-    # 1/sqrt(2) rounded to 3 places is normalized to ~1e-4, which must fail.
-    with pytest.raises(ValueError, match="normalized"):
-        _signal(polarization=(0.707 + 0j, 0.707 + 0j))
-
-
-def test_polarization_accepts_floating_point_normalization_noise() -> None:
-    # ... but the exact float 1/sqrt(2) pair must pass.
-    component = complex(1.0 / math.sqrt(2.0))
-    assert _signal(polarization=(component, component)).polarization is not None

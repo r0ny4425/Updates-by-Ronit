@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, fields
 from enum import Enum
-from math import isfinite
 from typing import Any, Optional, TypeAlias, Union
 from uuid import UUID
 
@@ -19,9 +18,6 @@ from simyuj.primitives.coherent_state import CoherentState
 from simyuj.primitives.ids import _require_optional_correlation_id
 from simyuj.primitives.subsystems import SubsystemHandle
 from simyuj.primitives.validation import require_optional_positive_real
-
-_POLARIZATION_NORM_ATOL = 1e-12
-"""Absolute tolerance on ``|u_H|**2 + |u_V|**2 == 1`` for a Jones vector."""
 
 
 class _Keep:
@@ -38,8 +34,8 @@ _KEEP = _Keep()
 
 Omitting a field name from the call already means "keep it", so this sentinel is
 only needed by a caller that computes a value which may or may not be a
-replacement. It exists because ``None`` is a legal value for ``coherent_state``
-and ``polarization``: clearing an optical amplitude and preserving one must stay
+replacement. It exists because ``None`` is a legal value for
+``coherent_state``: clearing an optical amplitude and preserving one must stay
 distinguishable, and a bare ``None`` cannot express both.
 """
 
@@ -211,7 +207,7 @@ class Signal:
     validation_flag: bool = True
     "Whether to run construction-time validation."
 
-    # The three optical fields below are appended at the end of the field list
+    # The two optical fields below are appended at the end of the field list
     # rather than grouped next to ``wavelength_nm``, where they belong
     # conceptually. Appending makes "is any call site constructing Signal
     # positionally?" unanswerable rather than answered once -- including for a
@@ -259,14 +255,6 @@ class Signal:
     helper rounds to integer picoseconds, which would quantize any overlap
     computed from it. The seconds-to-ticks rule governs event times, which must
     be integers; a continuous width does not."""
-
-    polarization: Optional[tuple[complex, complex]] = None
-    """Jones vector ``(u_H, u_V)`` of the occupied polarization mode, or ``None``.
-
-    Normalized to ``|u_H|**2 + |u_V|**2 == 1``. This is a descriptor of the mode
-    the pulse occupies, **not** an independent quantum system attached to it: the
-    physical field is ``(alpha*u_H, alpha*u_V)``, one amplitude times a
-    direction. ``None`` means no polarization is modelled for this signal."""
 
     def __post_init__(self):
 
@@ -368,13 +356,6 @@ class Signal:
                 field_name="temporal_mode_sigma_s",
             ),
         )
-
-        if self.polarization is not None:
-            object.__setattr__(
-                self,
-                "polarization",
-                _normalized_polarization(self.polarization),
-            )
 
     def _derived(self, **replacements: Any) -> "Signal":
         """Return a copy of this signal with named fields replaced.
@@ -482,37 +463,3 @@ _SIGNAL_FIELD_SETTERS: dict[str, Any] = {
 Also the membership test for the unknown-field check, which is why that check is
 a ``dict`` lookup rather than a scan of :data:`_SIGNAL_FIELD_NAMES`.
 """
-
-
-def _normalized_polarization(value: object) -> tuple[complex, complex]:
-    """Validate a Jones vector and return it as a 2-tuple of ``complex``.
-
-    Accepts ``int`` and ``float`` components and converts them, so ``(1.0, 0.0)``
-    is a valid horizontal state. ``bool`` components are rejected.
-    """
-    if not isinstance(value, tuple):
-        raise TypeError("polarization must be a tuple of two complex components")
-    if len(value) != 2:
-        raise ValueError("polarization must have exactly two components")
-
-    resolved: list[complex] = []
-    for index, component in enumerate(value):
-        if isinstance(component, bool) or not isinstance(
-            component,
-            (int, float, complex),
-        ):
-            raise TypeError("polarization components must be int, float, or complex")
-        as_complex = complex(component)
-        if not isfinite(as_complex.real) or not isfinite(as_complex.imag):
-            raise ValueError("polarization components must be finite")
-        resolved.append(as_complex)
-        del index
-
-    norm = sum(c.real * c.real + c.imag * c.imag for c in resolved)
-    if abs(norm - 1.0) > _POLARIZATION_NORM_ATOL:
-        raise ValueError(
-            "polarization must be normalized to |u_H|**2 + |u_V|**2 == 1, "
-            f"got {norm!r}"
-        )
-
-    return (resolved[0], resolved[1])

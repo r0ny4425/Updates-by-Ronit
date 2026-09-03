@@ -133,7 +133,6 @@ def test_emitted_signal_is_a_coherent_pulse_with_no_qstate() -> None:
     assert signal.state_targets == ()
     assert isinstance(signal.coherent_state, CoherentState)
     assert signal.temporal_mode_sigma_s == 2e-13
-    assert signal.polarization is None
     assert signal.id == "alice_laser:pulse:1"
 
     # The single sharpest statement that no photon number was ever sampled:
@@ -520,18 +519,6 @@ def test_a_polarization_selector_prepares_one_mode_record_per_pulse() -> None:
 
     # Each pulse owns its own record; nothing is shared or reused.
     assert len({signal.state_ref for signal in sink.signals}) == 5
-
-
-def test_signal_polarization_stays_none_so_the_qstate_record_is_the_only_copy() -> None:
-    # Signal.polarization and a "mode" qstate record are the same physical
-    # quantity, and only the record survives channel noise -- a depolarized mode
-    # has no Jones vector to write back. Setting both would hand a detector the
-    # prepared state while the arrived state sat in qstate.
-    source = _make_source(polarization=_FixedPolarization(jones=_H))
-    _timeline, sink = _run(source)
-
-    assert all(signal.polarization is None for signal in sink.signals)
-    assert all(signal.state_ref is not None for signal in sink.signals)
 
 
 def test_report_records_the_jones_vector_and_its_alphabet_index() -> None:

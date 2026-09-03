@@ -66,19 +66,10 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from math import pi
+from math import isfinite, pi
 from typing import TYPE_CHECKING, Protocol
 
 from simyuj.primitives.validation import require_finite_real, require_non_negative_real
-
-# Reached into rather than reimplemented, following ``signal.py``'s own import of
-# ``primitives.ids._require_optional_correlation_id``. A second definition would
-# mean a second normalization tolerance and a second error message for one
-# physical constraint, and the two would drift. This is the *same* check
-# ``Signal.__post_init__`` runs -- which is the point: the source builds its
-# signals with ``validation_flag=False``, so that check never fires on the
-# emission hot path and the selection is where it has to happen instead.
-from simyuj.signal.signal import _normalized_polarization
 
 if TYPE_CHECKING:
     from simyuj.engine.rng_manager import DeterministicRNG
@@ -156,6 +147,44 @@ class PhaseSelection:
     index: int
 
 
+_POLARIZATION_NORM_ATOL = 1e-12
+"""Absolute tolerance on ``|u_H|**2 + |u_V|**2 == 1`` for a Jones vector."""
+
+
+def _normalized_polarization(value: object) -> tuple[complex, complex]:
+    """Validate a Jones vector and return it as a 2-tuple of ``complex``.
+
+    Accepts ``int`` and ``float`` components and converts them, so ``(1.0, 0.0)``
+    is a valid horizontal state. ``bool`` components are rejected.
+    """
+    if not isinstance(value, tuple):
+        raise TypeError("polarization must be a tuple of two complex components")
+    if len(value) != 2:
+        raise ValueError("polarization must have exactly two components")
+
+    resolved: list[complex] = []
+    for index, component in enumerate(value):
+        if isinstance(component, bool) or not isinstance(
+            component,
+            (int, float, complex),
+        ):
+            raise TypeError("polarization components must be int, float, or complex")
+        as_complex = complex(component)
+        if not isfinite(as_complex.real) or not isfinite(as_complex.imag):
+            raise ValueError("polarization components must be finite")
+        resolved.append(as_complex)
+        del index
+
+    norm = sum(c.real * c.real + c.imag * c.imag for c in resolved)
+    if abs(norm - 1.0) > _POLARIZATION_NORM_ATOL:
+        raise ValueError(
+            "polarization must be normalized to |u_H|**2 + |u_V|**2 == 1, "
+            f"got {norm!r}"
+        )
+
+    return (resolved[0], resolved[1])
+
+
 @dataclass(frozen=True, slots=True)
 class PolarizationSelection:
     """One selected polarization mode and its position in the alphabet.
@@ -181,12 +210,10 @@ class PolarizationSelection:
     side of that seam is what lets one selector instance drive several sources,
     and it keeps the emit path free of a "descriptor or reference" branch.
 
-    **The vector is validated here because the emit path cannot validate it.**
-    ``Signal.__post_init__`` normalizes ``polarization``, but the source builds
-    its signals with ``validation_flag=False`` and the check is skipped whole.
-    Validating at selection construction costs one call per selector rather than
-    one per pulse, and it fires at the point a caller can act on -- when the
-    alphabet is written, not on the pulse that happens to draw the bad entry.
+    **The vector is validated here.** Validating at selection construction costs
+    one call per selector rather than one per pulse, and it fires at the point a
+    caller can act on -- when the alphabet is written, not on the pulse that
+    happens to draw the bad entry.
 
     There is no ``rep`` field, unlike ``StateSample``. A Jones vector is by
     construction a pure single-mode state, so ``"ket"`` is the only

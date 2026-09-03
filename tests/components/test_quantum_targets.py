@@ -113,10 +113,12 @@ def test_role_defaults_to_qubit_so_an_unstamped_handle_is_a_carrier() -> None:
     assert qstate_payload_role(_signal()) == "qubit"
 
 
-def test_role_matches_the_presence_check_for_every_signal_today() -> None:
-    # The property that lets the discriminator land before polarization exists:
-    # while no handle is ever "mode", role == "qubit" is exactly
-    # state_ref is not None, so a channel branching on either behaves the same.
+def test_role_matches_the_presence_check_for_an_unstamped_handle() -> None:
+    # For a signal whose handle takes the "qubit" default, role == "qubit" is
+    # exactly state_ref is not None, so a channel branching on either behaves
+    # the same. That equivalence is what let the discriminator land ahead of its
+    # first caller; it does not hold for a "mode" handle, which the two tests
+    # below cover.
     for signal in (_signal(), _signal(state_ref=None)):
         presence = signal.state_ref is not None
         assert (qstate_payload_role(signal) == "qubit") is presence

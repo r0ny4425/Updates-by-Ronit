@@ -216,8 +216,11 @@ class Signal:
     coherent_state: Optional[CoherentState] = None
     """Optical amplitude carried by this signal, or ``None``.
 
-    A coherent pulse is not a qubit: a signal carrying this has no ``state_ref``
-    and no ``state_targets``. Mean photon number and phase are derived from
+    The amplitude is not a qubit, and it is independent of any qstate-backed
+    degree of freedom the signal may also carry: a pulse may carry only this,
+    with ``state_ref`` and ``state_targets`` empty, or this together with a
+    ``state_ref``, as a weak coherent pulse carrying polarization does. Mean
+    photon number and phase are derived from
     :class:`~simyuj.primitives.coherent_state.CoherentState`, never stored
     beside it."""
 

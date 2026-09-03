@@ -34,7 +34,8 @@ def test_trial_emits_one_pulse_per_slot_and_decodes_every_adjacent_pair() -> Non
     assert trial["pulses_emitted"] == SLOTS
     assert trial["pulses_delivered"] == SLOTS
     assert trial["preparation_reports"] == SLOTS
-    # A coherent source touches timeline.qstate zero times.
+    # This trial configures no polarization, so the source touches
+    # timeline.qstate zero times.
     assert trial["qstate_records"] == 0
     assert trial["differential_bits"] == SLOTS - 1
 

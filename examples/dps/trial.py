@@ -556,8 +556,10 @@ def run_dps_transmitter_trial(
         "pulses_emitted": source.pulse_count,
         "pulses_delivered": len(arrival_ticks),
         "preparation_reports": len(source.reports),
-        # A coherent source creates no quantum state. This staying at 0 is the
-        # sharpest single statement that no photon number was ever sampled.
+        # This trial configures no polarization, so this stays at 0. That is a
+        # fact about the configuration; a polarized source prepares one mode
+        # record per pulse. The claim that holds either way is that no photon
+        # number was ever sampled.
         "qstate_records": timeline.qstate.size(),
         "differential_bits": len(differential_bits),
         "slot_period_ticks": dps_slot_period_ticks(config.clock_hz),

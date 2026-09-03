@@ -291,8 +291,11 @@ class InterferenceReport:
     Notes
     -----
     Like the coherent source's report there is no ``state_ref``, no
-    ``state_targets``, and no sampler field: interfering two coherent amplitudes
-    creates no quantum state record.
+    ``state_targets``, and no sampler field. Interfering two coherent amplitudes
+    creates no quantum state record, and no record arrives to be carried through
+    either: this device refuses any signal carrying a ``state_ref``, so a
+    polarized pulse never reaches BS2. Optical interference of a described mode
+    is not implemented; see ``CAPABILITY_MAP.md`` section 5.
 
     ``interference_index`` counts this device's combinations. Join downstream
     results on ``short_pulse_index`` / ``long_pulse_index`` or on the signal ids,
@@ -975,10 +978,13 @@ class DelayInterferometer(Component):
         if signal.state_ref is not None:
             raise ValueError(
                 f"delay interferometer {self.device_id!r} cannot interfere "
-                f"signal {signal.id!r} with state_ref={signal.state_ref!r}: a "
-                "qstate-backed photon has no optical amplitude to split and no "
-                "record here to collapse, and interfering it would silently "
-                "strand its state; send a coherent pulse, not a photon"
+                f"signal {signal.id!r} with state_ref={signal.state_ref!r}: the "
+                "amplitude is splittable but the qstate record travelling with "
+                "it is not, and this device builds its outputs with "
+                "state_ref=None, so interfering it would silently strand that "
+                "record; send a pulse with no qstate record, such as one from "
+                "WeakCoherentPulseSource configured without a polarization "
+                "selector"
             )
 
         if signal.temporal_mode_sigma_s is None:

@@ -6,9 +6,13 @@ amplitude, so :class:`CoherentState` stores ``alpha`` and nothing else. Mean
 photon number and phase are derived properties; they cannot drift out of sync
 with the amplitude because there is nothing else to drift.
 
-This is deliberately **not** a qstate-backed representation. A coherent pulse
+The amplitude is deliberately **not** a qstate-backed representation. ``alpha``
 has no ``StateRef``, no subsystem in the quantum state manager, and no density
-matrix. Quantum behaviour enters only at photon detection.
+matrix, and quantum behaviour enters it only at photon detection. That is a
+claim about the amplitude, not about the pulse: a signal carrying a
+:class:`CoherentState` may also carry a qstate record describing the mode that
+amplitude occupies, as a polarized weak coherent pulse does. That record is not
+this type and is reached through ``Signal.state_ref``.
 
 Scope of this module
 --------------------

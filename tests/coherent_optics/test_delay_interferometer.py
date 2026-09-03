@@ -221,7 +221,9 @@ def test_an_n_pulse_train_gives_n_plus_one_combinations_and_conserves_energy() -
             report.mean_photon_number_0 + report.mean_photon_number_1
         ) == pytest.approx(report.mean_photon_number_in, abs=ATOL)
 
-    # Nothing is left waiting, and no quantum state was ever created.
+    # Nothing is left waiting, and no quantum state was created: the source is
+    # configured without polarization and the device refuses any signal that
+    # carries a state_ref, so nothing on this path reaches qstate.
     assert device.held_arm_count == 0
     assert timeline.qstate.size() == 0
 

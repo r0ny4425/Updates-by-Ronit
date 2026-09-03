@@ -132,7 +132,18 @@ non-physics body.
 
 Not reusable: `_emit_now`'s payload half — the `StateSampler` draw,
 `timeline.qstate.prepare(...)`, the `SubsystemHandle`, and
-`apply_noise_models(...)`. A WCP creates no qstate record at all.
+`apply_noise_models(...)`. A WCP given no polarization selector creates no qstate
+record at all.
+
+> **Rescoped — this finding said "a WCP creates no qstate record at all".** True
+> of alpha and true of the
+> configuration this section was written against, but not of a WCP in general,
+> so the sentence above now names the configuration.
+> Step 7 (`5f61980`) gave the source a polarization selector, and a polarized
+> pulse *does* reach `timeline.qstate.prepare(...)` and *does* carry a
+> `SubsystemHandle`, stamped `"mode"` — so two of the four items listed here as
+> not reusable were in fact reused, in `_prepare_polarization_mode`. What stays
+> unreusable is the `StateSampler` draw, and `apply_noise_models` at the source.
 
 One helper needs care. `bind_source_rngs(...)` binds exactly three streams named
 `"emission"`, `"state"`, `"timing"` and returns them positionally. The WCP source
@@ -1261,8 +1272,9 @@ The WCP source binds **four** streams directly rather than using
 ```
 
 `bind_source_rngs` binds exactly `"emission"`, `"state"`, `"timing"` and returns
-them positionally. The WCP has no emission Bernoulli and no qstate, so two of the
-three would be declared and never drawn. A declared-but-never-drawn stream is a
+them positionally. The WCP has no emission Bernoulli and samples no state — a
+polarized pulse's mode record is prepared from a selector's choice, not drawn
+from a `"state"` stream — so two of the three would be declared and never drawn. A declared-but-never-drawn stream is a
 lie in the binding log, and the helper cannot be extended without changing the
 signature that `SinglePhotonSource` and `EntangledPairSource` both depend on. Four
 explicit `timeline.rng(...)` lines are clearer than a helper that fits badly. The
@@ -1310,9 +1322,18 @@ class CoherentPulsePreparationReport:
 ```
 
 The first eight fields are the reference's record unchanged. The rest are the per-
-pulse choices it had no need for. **No `state_ref`, no `state_targets`, no
-`sampler_*`** — this source creates no quantum state and has no sampler, and a
-report claiming otherwise would be false in the record step 6 reads.
+pulse choices it had no need for. **No `sampler_*`** — this source samples no
+photon number, and a report claiming a sampler choice would be false in the
+record step 6 reads.
+
+**No `state_ref` and no `state_targets` either, and that is the narrower claim
+it looks like.** Preparing an amplitude allocates nothing, so an unpolarized run
+has no reference such a field could carry. A *polarized* run allocates one record
+per pulse for the occupied mode and this report still does not name it, so an
+agent reading a polarized preparation holds the Jones vector and its alphabet
+index and reaches the record only through the emitted signal. That is a gap
+rather than a principle; see the shipped report's own Notes in
+`components/sources/reports.py`.
 
 Typed fields rather than a `wcp.` namespace in `meta`, reversing an earlier draft:
 the choices are this report's entire purpose, and four of them do not belong in an

@@ -9,11 +9,13 @@ agent.
 Two report types live here because there are two kinds of source.
 :class:`SourcePreparationReport` describes a qstate-backed preparation and
 carries a ``state_ref`` and sampler choice. :class:`CoherentPulsePreparationReport`
-describes an optical preparation, which creates no quantum state at all, and
-carries the classical choices that produced the amplitude instead. Neither
-borrows the other's fields: a report claiming a sampler that does not exist, or
-a state reference that was never allocated, is false in the record an agent
-reads.
+describes an optical preparation and carries the classical choices that produced
+the amplitude instead. Preparing an amplitude creates no quantum state; an
+unpolarized pulse therefore reaches no qstate at all, while a polarized one
+additionally has one record per pulse prepared for the mode it occupies. Neither
+report borrows the other's fields: a report claiming a sampler that does not
+exist, or a state reference that was never allocated, is false in the record an
+agent reads.
 """
 
 from __future__ import annotations
@@ -121,9 +123,16 @@ class CoherentPulsePreparationReport:
 
     Notes
     -----
-    There is no ``state_ref``, no ``state_targets``, and no ``sampler_*`` field.
-    Emitting a coherent pulse creates no quantum state record, and a report
-    carrying those fields would misdescribe what happened.
+    There is no ``sampler_*`` field: nothing here samples a photon number, so a
+    report naming a sampler choice would misdescribe what happened.
+
+    There is also no ``state_ref`` and no ``state_targets``, and that is a
+    narrower statement than it looks. Preparing an amplitude allocates nothing,
+    so for an unpolarized pulse there is no reference such a field could carry.
+    A *polarized* pulse does allocate one record per pulse for the mode it
+    occupies, and this report does not name it -- an agent reading a polarized
+    preparation holds the Jones vector and its alphabet index, and reaches the
+    record only through the emitted signal's ``state_ref``.
 
     The carrier and encoding phases are recorded **separately** rather than
     pre-summed. Their sum is already available as

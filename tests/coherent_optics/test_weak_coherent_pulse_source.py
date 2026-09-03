@@ -122,7 +122,7 @@ def test_every_active_slot_emits_exactly_one_pulse() -> None:
     del timeline
 
 
-def test_emitted_signal_is_a_coherent_pulse_with_no_qstate() -> None:
+def test_an_unpolarized_pulse_carries_an_amplitude_and_no_qstate() -> None:
     source = _make_source(temporal_mode_sigma_s=2e-13)
     timeline, sink = _run(source)
 
@@ -135,8 +135,10 @@ def test_emitted_signal_is_a_coherent_pulse_with_no_qstate() -> None:
     assert signal.temporal_mode_sigma_s == 2e-13
     assert signal.id == "alice_laser:pulse:1"
 
-    # The single sharpest statement that no photon number was ever sampled:
-    # the source never touches the quantum state manager at all.
+    # The single sharpest statement that no photon number was ever sampled: at
+    # the default polarization=None the source never touches the quantum state
+    # manager at all. A polarized source does, once per pulse, for the mode --
+    # see test_a_polarization_selector_prepares_one_mode_record_per_pulse.
     assert timeline.qstate.size() == 0
 
 
@@ -261,11 +263,15 @@ def test_report_records_both_phases_separately_and_their_alphabet_indices() -> N
     ]
 
 
-def test_report_carries_no_qstate_or_sampler_fields() -> None:
+def test_report_carries_no_sampler_or_state_fields() -> None:
     # This cannot fail today. It is kept because it guards a physics claim
-    # across a future edit: emitting a coherent pulse creates no quantum state,
-    # and step 7 widens this exact report for polarization -- which is when
-    # someone might reach for a state_ref beside it.
+    # across a future edit: nothing here samples a photon number, so no
+    # sampler_* field is meaningful. The state fields are absent for a narrower
+    # reason -- preparing an amplitude allocates nothing, so an unpolarized run
+    # has no reference to record. A polarized run does allocate one per pulse
+    # and this report still does not name it; that gap is deliberate for now,
+    # not an invariant, and the assertion below pins today's shape rather than
+    # a claim that a coherent source can never touch qstate.
     source = _make_source()
     _run(source)
 

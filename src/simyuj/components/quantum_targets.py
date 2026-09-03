@@ -12,10 +12,12 @@ that propagates. :func:`qstate_targets_from_signal` answers *which subsystem*;
 needs both, because only the second decides whether channel loss may destroy the
 record.
 
-Every signal in the simulator today carries a ``"qubit"`` record, so the two
-questions currently have the same answer and ``role == "qubit"`` is equivalent
-to ``state_ref is not None``. They diverge for a coherent pulse that carries a
-polarization state beside its amplitude, which is why the role exists.
+For a photon signal the record is the carrier, so the two questions have the
+same answer and ``role == "qubit"`` is equivalent to ``state_ref is not None``.
+They diverge for a polarized coherent pulse, whose record describes the mode its
+amplitude occupies rather than the thing that propagates. That signal ships:
+``WeakCoherentPulseSource`` builds one whenever a polarization selector is
+configured, which is why the role exists.
 
 :func:`qubit_carrier_targets_from_signal` asks both at once, for the components
 that only work when the answers agree. A qstate-measuring component -- a

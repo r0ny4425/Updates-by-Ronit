@@ -52,12 +52,16 @@ about a third of what is left.
 |---|---|
 | `pulses_emitted` | exactly `configured_slots` — there is no emission Bernoulli |
 | `pulses_delivered` | equal to `pulses_emitted` — nothing lossy is wired in yet |
-| `qstate_records` | **0** — a coherent pulse creates no quantum state |
+| `qstate_records` | **0** — this trial configures no polarization, so nothing reaches qstate |
 | `differential_bits` | `pulses_emitted - 1` — the first pulse has no predecessor |
 | `encoding_phase_histogram` | roughly balanced over `(0, pi)` |
 | `carrier_phase_distinct_values` | `1` by default; `pulses_emitted` with `--randomize-carrier-phase` |
 
-`qstate_records: 0` is the one to look at first. Nothing anywhere samples
+`qstate_records: 0` is the one to look at first, though read it for what it is:
+a statement about *this configuration*, not about coherent pulses in general. A
+source given a polarization selector prepares one record per pulse for the mode
+its amplitude occupies, and this counter would then track the pulse count. The
+claim that holds either way is the one underneath: nothing anywhere samples
 `n ~ Poisson(mu)`; photon statistics are integrated in closed form at detection,
 as `1 - exp(-eta*mu)` — one uniform draw against a probability, never a count.
 

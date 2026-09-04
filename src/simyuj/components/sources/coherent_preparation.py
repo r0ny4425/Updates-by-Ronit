@@ -21,45 +21,20 @@ Each choice is made by a small frozen strategy object supplied at construction,
 following ``GateModel`` in ``detectors/primitives/gate.py``: a ``Protocol`` with
 a trivial implementation, a parametric one, and an explicit-sequence one.
 
-Four protocols, not one
------------------------
+There is one protocol per quantity rather than one generic selector, and the
+carrier and encoding phases are separate policies because a differential-phase
+protocol needs the carrier held across a block while the encoding varies. See
+``docs/dev/dps-design.md`` section 5.
 
-Three of the four quantities are floats, so a single generic selector protocol
-would type-check ``intensity=RandomPhaseChoice(...)`` and silently produce
-:math:`\\mu \\in \\{0, \\pi\\}`. They also have different domains --
-:math:`\\mu` is non-negative, a phase is any finite real -- and different
-validation is different type. The fourth is not a float at all.
-
-The carrier and encoding phases are kept apart for a physical reason, not a
-stylistic one. In a differential-phase protocol the bit lives in
-:math:`\\varphi_n - \\varphi_{n-1}`, so a carrier phase randomized independently
-per pulse contributes :math:`\\Theta_n - \\Theta_{n-1}` and destroys the
-encoding, while a carrier phase held across a block cancels exactly. One
-conflated phase quantity cannot express both. Decoy-state BB84 wants the
-opposite of what DPS wants here, which is why this is a policy and not a
-constant.
-
-Return shapes
--------------
-
-Intensity, encoding phase, and polarization return a small frozen record carrying
-**both the value and its position in the alphabet**, because the index is what a
-protocol agent decodes and what the preparation report records. The carrier phase
-returns a bare ``float``: ``PerPulseRandomCarrierPhase`` draws from a continuous
-distribution and has no alphabet to index, which is exactly why
-``CoherentPulsePreparationReport`` has ``intensity_index``,
-``encoding_phase_index`` and ``polarization_index`` but no
-``carrier_phase_index``.
-
-Purity and the pulse counter
-----------------------------
+Intensity, encoding phase and polarization each return a frozen record carrying
+the value **and** its position in the alphabet, since the index is what a
+protocol agent decodes. The carrier phase returns a bare ``float`` -- it may come
+from a continuous distribution with no alphabet to index.
 
 ``select_*(index, rng)`` is pure: the selector receives the source's pulse
-counter rather than holding a cursor, so one selector instance can drive several
-sources without shared hidden state. ``index`` is **zero-based** -- the first
-pulse of a run selects with ``index=0``, so ``PhaseSequence`` starts at
-``phases[0]``. ``CoherentPulsePreparationReport.pulse_index`` is one-based; the
-two differ by one on purpose and the report field is the one meant for humans.
+counter rather than holding a cursor, so one instance can drive several sources.
+``index`` is **zero-based**, while
+``CoherentPulsePreparationReport.pulse_index`` is one-based.
 """
 
 from __future__ import annotations
@@ -204,23 +179,15 @@ class PolarizationSelection:
     -----
     **This is a specification, not a record.** ``jones`` is *what to prepare*;
     the source calls ``timeline.qstate.prepare`` and owns the resulting
-    ``state_ref``. The precedent is ``StateSample`` in ``qstate/sampler.py``,
-    which ``SinglePhotonSource`` consumes exactly this way: the sampler is pure
-    and never touches the timeline. Keeping the selector on the specification
-    side of that seam is what lets one selector instance drive several sources,
-    and it keeps the emit path free of a "descriptor or reference" branch.
+    ``state_ref``.
 
-    **The vector is validated here.** Validating at selection construction costs
-    one call per selector rather than one per pulse, and it fires at the point a
-    caller can act on -- when the alphabet is written, not on the pulse that
-    happens to draw the bad entry.
+    The vector is validated here, at selection construction, so a bad alphabet
+    entry fails when it is written rather than on the pulse that draws it.
 
-    There is no ``rep`` field, unlike ``StateSample``. A Jones vector is by
-    construction a pure single-mode state, so ``"ket"`` is the only
-    representation it can name; a field with one legal value documents nothing
-    and invites a caller to set it wrongly. Partially polarized light is not a
-    Jones vector at all -- it arrives as a ``NoiseModel`` on the prepared mode
-    record, which ``QuantumChannel`` already applies through the density path.
+    There is no ``rep`` field: a Jones vector is a pure single-mode state, so
+    ``"ket"`` is the only representation it could name. Partially polarized light
+    is not a Jones vector at all and arrives as a ``NoiseModel`` on the prepared
+    record.
     """
 
     jones: tuple[complex, complex]
@@ -284,19 +251,14 @@ class PolarizationSelector(Protocol):
 
     Notes
     -----
-    **No implementation of this protocol ships in this module.** The protocol,
-    :class:`PolarizationSelection`, the source's ``polarization`` parameter and
-    its RNG stream exist so that a decoy-BB84 alphabet is one new class here and
-    no change anywhere else. Choosing that alphabet -- H/V/D/A ordering, and the
-    convention a receiving agent decodes ``polarization_index`` against -- is a
-    protocol decision and is deliberately not made here. ``RandomPhaseChoice``'s
-    warning about silently inverted alphabets applies verbatim.
+    **No implementation of this protocol ships in this module.** Choosing an
+    alphabet -- H/V/D/A ordering, and the convention a receiving agent decodes
+    ``polarization_index`` against -- is a protocol decision.
+    ``RandomPhaseChoice``'s warning about silently inverted alphabets applies
+    verbatim.
 
-    Returns a :class:`PolarizationSelection`, which is a *specification*: the
-    selector stays pure and never touches ``timeline.qstate``. The source
-    prepares the record and stamps it ``SubsystemHandle(kind="mode")`` so
-    ``qstate_payload_role`` reports ``"mode"`` and channel loss scales the
-    amplitude instead of destroying the state.
+    The selector stays pure and never touches ``timeline.qstate``; the source
+    prepares the record and stamps it ``SubsystemHandle(kind="mode")``.
     """
 
     def select_polarization(

@@ -14,30 +14,11 @@ claim about the amplitude, not about the pulse: a signal carrying a
 amplitude occupies, as a polarized weak coherent pulse does. That record is not
 this type and is reached through ``Signal.state_ref``.
 
-Scope of this module
---------------------
-
 Only the *definition* lives here. Every optical **operation** on a coherent
-amplitude -- phase shift, attenuation, beamsplitter splitting, interference,
-temporal overlap -- belongs in ``simyuj.components.coherent_optics`` and takes
-and returns values of this type.
-
-Why the type lives in ``primitives``
-------------------------------------
-
-It follows :class:`~simyuj.primitives.subsystems.SubsystemHandle`: the same kind
-of thing in the same relationship -- a value type carried by a field of
-``Signal``, referenced by component code, and owned by neither package.
-``SubsystemHandle`` is likewise not re-exported from ``simyuj.signal``; callers
-import it from here.
-
-There is also a hard constraint. ``Signal`` type-checks the value it carries, so
-the type must be importable from the signal layer. Defining it under
-``components`` makes ``import simyuj.signal`` circular, because
-``components.__init__`` imports the channels, which import ``simyuj.signal``
-while it is still initialising. ``primitives`` is below both and is safe: this
-package's ``__init__`` loads submodules lazily, so importing this module does
-not pull in ``primitives.messages``, which *does* depend on ``simyuj.signal``.
+amplitude belongs in ``simyuj.components.coherent_optics`` and takes and returns
+values of this type. The type is not re-exported from ``simyuj.signal``; callers
+import it from here. See ``docs/dev/dps-design.md`` section 4 for why it lives
+under ``primitives``.
 """
 
 from __future__ import annotations
@@ -74,17 +55,12 @@ class CoherentState:
 
     Notes
     -----
-    ``alpha`` is the single source of truth. :attr:`mean_photon_number` and
-    :attr:`phase_rad` are computed on access rather than stored, so no
-    combination of fields can become inconsistent.
+    ``alpha`` is the single source of truth; the other two are computed on
+    access.
 
-    There is no upper bound on the amplitude. A "weak" coherent pulse is a
-    modelling convention chosen by the caller, not a constraint enforced here;
-    a mean photon number of 4 is as valid as 0.1.
-
-    The vacuum state ``alpha = 0`` is a valid coherent state, not an absent
-    pulse. :attr:`phase_rad` returns ``0.0`` for it rather than raising, which
-    matches ``cmath.phase(0j)``.
+    There is no upper bound on the amplitude -- "weak" is a caller's convention,
+    not a constraint enforced here. The vacuum ``alpha = 0`` is a valid coherent
+    state, not an absent pulse, and :attr:`phase_rad` returns ``0.0`` for it.
 
     Examples
     --------
@@ -114,13 +90,7 @@ class CoherentState:
 
     @property
     def mean_photon_number(self) -> float:
-        """Mean photon number :math:`\\mu = |\\alpha|^2`.
-
-        Notes
-        -----
-        Computed as ``re * re + im * im`` rather than ``abs(alpha) ** 2`` to
-        avoid the square-root round trip inside ``abs``.
-        """
+        """Mean photon number :math:`\\mu = |\\alpha|^2`."""
         return self.alpha.real * self.alpha.real + self.alpha.imag * self.alpha.imag
 
     @property

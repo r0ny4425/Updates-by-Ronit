@@ -1,24 +1,10 @@
 """Optical arithmetic on coherent-state amplitudes.
 
 Every operation on a :class:`~simyuj.primitives.coherent_state.CoherentState`
-lives here. The type itself lives in ``primitives/coherent_state.py`` and holds
-no math -- that split is what makes "``Signal`` carries definitions, not
-physics" true by construction, and it is forced besides: ``signal/signal.py``
-imports the type, so defining it here would make ``import simyuj.signal``
-circular through ``components/__init__``.
+lives here; the type itself lives in ``primitives/coherent_state.py`` and holds
+no math. This module takes no RNG and returns no random value.
 
-The functions are free functions rather than methods on ``CoherentState``, and
-their scalar arguments are keyword-only. Of the operations this module will
-eventually hold, only these two could have been methods at all: interference and
-beamsplitter splitting are binary and return pairs, and temporal overlap and
-click probability take no amplitude. Methods would have covered two of eight and
-split the arithmetic across two layers.
-
-This module takes no RNG and returns no random value, which makes "nothing here
-samples a photon number" structural rather than a comment. Photon statistics are
-integrated in closed form at detection.
-
-Shipped when their first caller exists, not before: ``polarization_weights``,
+Not yet shipped, pending a first caller: ``polarization_weights``,
 ``rotated_polarization``.
 
 Beamsplitter convention
@@ -31,18 +17,12 @@ Both splitters use the **real** 50:50 matrix
    \\frac{1}{\\sqrt{2}}\\begin{pmatrix} 1 & -1 \\\\ 1 & 1 \\end{pmatrix}
 
 stated here once and used by :func:`split_50_50`, :func:`interfere`, and the
-tests. The symmetric convention
-:math:`\\tfrac{1}{\\sqrt2}\\bigl(\\begin{smallmatrix}1 & i\\\\ i &
-1\\end{smallmatrix}\\bigr)` is the *same physical device*: it gives an identical
-port 0 and a port 1 differing only by an unobservable global :math:`i`. The two
-differ in where the interference term lands -- :math:`\\operatorname{Im}` for
-the symmetric one, :math:`\\operatorname{Re}` for the real one -- and
-:math:`\\operatorname{Re}` is chosen so the :math:`\\mu` equations below read
-the way the tests are written. **Never mix them.** A specification that writes
+tests. The symmetric convention puts the interference term in
+:math:`\\operatorname{Im}` where this one puts it in
+:math:`\\operatorname{Re}`. **Never mix them**: a specification that writes
 :math:`a_l = i\\alpha/\\sqrt2` at the first splitter *and* :math:`\\mu`
-equations in :math:`\\operatorname{Re}` is internally inconsistent; the
-:math:`i` does not remove interference, it moves it to
-:math:`\\operatorname{Im}`.
+equations in :math:`\\operatorname{Re}` is internally inconsistent. See
+``docs/dev/dps-design.md`` section 4.
 """
 
 from __future__ import annotations
@@ -134,24 +114,14 @@ def attenuated(
     Notes
     -----
     **Power, not amplitude.** The mean photon number scales as
-    :math:`\\eta`, and the amplitude as :math:`\\sqrt{\\eta}`. Passing an
-    amplitude transmission here would make loss look like its own square root,
-    which at 25 km of standard fibre is the difference between 0.2 and 0.45.
+    :math:`\\eta`, the amplitude as :math:`\\sqrt{\\eta}`. Passing an amplitude
+    transmission here would make loss look like its own square root -- at 25 km
+    of standard fibre, the difference between 0.2 and 0.45.
 
-    ``attenuated`` rather than ``with_attenuation``: the latter does not say
-    whether ``0.1`` is the loss or what survives it. The parameter name carries
-    the convention.
-
-    The phase is untouched -- attenuation is a real scaling, so
-    :attr:`~simyuj.primitives.coherent_state.CoherentState.phase_rad` comes out
-    of this function exactly as it went in.
-
-    ``power_transmission = 0.0`` returns the **coherent vacuum**, a real optical
-    state that still occupies its slot. It is not an absent pulse and it is not
-    a dropped one.
-
-    Values above ``1.0`` are rejected rather than clamped. Optical gain is not
-    modelled anywhere in this simulator; see ``CAPABILITY_MAP.md`` section 5.
+    The phase is untouched. ``power_transmission = 0.0`` returns the coherent
+    vacuum, which still occupies its slot and is not an absent or dropped pulse.
+    Values above ``1.0`` are rejected rather than clamped; optical gain is not
+    modelled, see ``CAPABILITY_MAP.md`` section 5.
 
     Examples
     --------
@@ -193,15 +163,10 @@ def phase_shifted(state: CoherentState, *, phase_rad: float) -> CoherentState:
     photon number is invariant up to floating-point rounding.
 
     **:math:`\\theta = \\pi` does not give exactly** :math:`-\\alpha`.
-    ``exp(1j*pi)`` is ``(-1+1.2246e-16j)``, and that residue is deliberately not
-    special-cased. A hidden branch for :math:`\\pi` would make exactness look
-    guaranteed, and an interferometer's dark port would then rest on an
-    implementation accident rather than on its own tolerance. Compare phases and
-    mean photon numbers with a tolerance, never with ``==``.
-
-    ``phase_shifted`` and :func:`attenuated` commute analytically but **not**
-    bit-exactly, because complex multiplication is not associative in floating
-    point.
+    ``exp(1j*pi)`` is ``(-1+1.2246e-16j)``, and that residue is not
+    special-cased. Compare phases and mean photon numbers with a tolerance,
+    never with ``==``. For the same reason ``phase_shifted`` and
+    :func:`attenuated` commute analytically but not bit-exactly.
 
     Examples
     --------
@@ -237,20 +202,11 @@ def split_50_50(state: CoherentState) -> tuple[CoherentState, CoherentState]:
 
     Notes
     -----
-    With vacuum on the second input the module's real 50:50 matrix gives
-    :math:`(\\alpha - 0)/\\sqrt2` and :math:`(\\alpha + 0)/\\sqrt2`, which are
-    equal. **The same immutable object is returned twice**, so
-    ``left is right``. That is safe because ``CoherentState`` is frozen, and it
-    is worth knowing before writing an identity assertion that means to test
-    something else.
+    With vacuum on the second input both outputs are equal, and **the same
+    immutable object is returned twice**, so ``left is right``. Worth knowing
+    before writing an identity assertion that means to test something else.
 
-    Under the symmetric convention port 1 would carry
-    :math:`i\\alpha/\\sqrt2` instead. The mean photon numbers are identical;
-    only a later phase-sensitive recombination could tell the two apart, which
-    is exactly why the module fixes one convention -- see the module docstring.
-
-    This is the *lossless* splitter. A real device's insertion loss is not
-    modelled here; compose with :func:`attenuated` if it is needed.
+    The *lossless* splitter; compose with :func:`attenuated` for insertion loss.
 
     Examples
     --------
@@ -304,33 +260,20 @@ def gaussian_temporal_overlap(
 
     Notes
     -----
-    **Field envelope, so equal widths give a denominator of 4.** At
-    :math:`\\sigma_a = \\sigma_b = \\sigma` this reduces to
+    **Field envelope, so equal widths give a denominator of 4** --
     :math:`\\exp[-\\Delta t^2/(4\\sigma^2)]`. An *intensity*-envelope
-    :math:`\\sigma` would give 8. The two parameterisations differ by
-    :math:`\\sqrt2` in the width and must never be mixed; this module and
-    ``Signal.temporal_mode_sigma_s`` are both field-envelope throughout.
+    :math:`\\sigma` would give 8; the two differ by :math:`\\sqrt2` in the width
+    and must never be mixed. This module and ``Signal.temporal_mode_sigma_s``
+    are field-envelope throughout.
 
-    **``delta_s`` is a centre-to-centre separation.** ``Signal`` fixes the
-    convention that a signal's tick is the centre of its temporal mode, so a
-    caller computes this from a tick difference and nothing else -- see
-    ``Signal.temporal_mode_sigma_s``.
+    **``delta_s`` is a centre-to-centre separation**, computed from a tick
+    difference and nothing else -- see ``Signal.temporal_mode_sigma_s``.
 
-    Keyword-only, because three floats in a row are trivially transposable and
-    two of them are interchangeable while the third is not.
-
-    **Zero width is rejected rather than special-cased.** The
-    :math:`\\sigma \\to 0` limit is a different, discrete model in which overlap
-    is an equality test on arrival ticks, and returning ``1.0`` or ``0.0`` from
-    here would quietly answer a question this formula was not asked. A caller
-    who wants that limit should pass a small width and see the exponential do
-    it.
-
-    The prefactor is the width mismatch alone: it is ``1.0`` at equal widths and
-    falls away as they diverge, so two pulses of different duration cannot
-    interfere perfectly even when perfectly aligned. At large separations the
-    exponential underflows to ``0.0``, which is the correct limit and not an
-    error.
+    Zero width is rejected rather than special-cased; pass a small width to
+    approach that limit. The prefactor is the width mismatch alone, so two
+    pulses of different duration cannot interfere perfectly even when perfectly
+    aligned. At large separations the exponential underflows to ``0.0``, which
+    is the correct limit and not an error.
 
     Examples
     --------
@@ -396,51 +339,24 @@ def interfere(
        r = \\frac{(1 - |\\gamma|^2)\\,\\mu_l}{2}, \\qquad
        \\mu_k = |a_k|^2 + r
 
-    This is algebraically identical to
-    :math:`\\mu_k = \\tfrac12[\\,\\mu_s + \\mu_l \\mp
-    2\\operatorname{Re}(\\overline{\\alpha_s}\\alpha_l\\gamma)\\,]` but keeps the
-    non-interfering light visible in the code rather than folded into an
-    algebraic identity.
-
-    **Energy is conserved at every overlap**: :math:`\\mu_0 + \\mu_1 =
-    \\mu_s + \\mu_l`. That identity is what catches a convention error, so it is
-    asserted on every case in the tests. It is also why the modulus of `overlap`
-    is bounded rather than accepted freely -- at :math:`|\\gamma| > 1` the
-    orthogonal remainder would go negative, the ``max`` clamp would hide it, and
-    the two ports would carry more light than entered.
-
-    **Vacuum inputs, zero overlap, unequal amplitudes, the first pulse of a
-    train and the last are values of this equation, not branches around it.**
-    Because the interference term is proportional to *both* amplitudes, a vacuum
-    partner kills it at any :math:`\\gamma`, and the result is a plain 50:50
-    split of whichever arm is present.
+    Energy is conserved at every overlap: :math:`\\mu_0 + \\mu_1 = \\mu_s +
+    \\mu_l`. Vacuum inputs, zero overlap and unequal amplitudes are values of
+    this equation, not branches around it. See ``docs/dev/dps-design.md``
+    section 4 for the derivation and the equivalent :math:`\\mu` form.
 
     **The result is intensity-exact and mode-truncated.** At
-    :math:`|\\gamma| < 1` the field leaving a port is
-    :math:`\\alpha_s f_s(t) \\mp \\gamma\\alpha_l f_l(t)`, a superposition of two
+    :math:`|\\gamma| < 1` the field leaving a port is a superposition of two
     non-identical envelopes that no single ``(alpha, sigma)`` pair describes. The
     returned state carries the exact :math:`\\mu` *including* the orthogonal
     residual, and the phase of the interfering component only. **Neither the
     phase nor the width of an output may feed a further phase-sensitive or
     temporal-mode interference.** At :math:`|\\gamma| = 1` all of it is exact.
 
-    The asymmetry between the arguments is the mode reference, not the physics:
-    :math:`\\gamma` projects the long arm onto the short arm's mode, so the
-    residual is the long arm's. A caller that swaps the arguments gets the same
-    two mean photon numbers, because the identity above is symmetric in
-    :math:`\\mu_s` and :math:`\\mu_l`, but the port-0 phase is taken from a
-    different reference.
-
-    **:math:`\\mu` does not round-trip bit-exactly.** The residual is added after
-    the amplitude is formed, so :math:`a_k` has the wrong modulus and the state
-    is rebuilt through ``from_mean_photon_number``, sending :math:`\\mu` through
-    ``sqrt`` and back. A :math:`\\mu` of ``0.2`` returns as
-    ``0.19999999999999998``. An analytically dark port lands wherever the
-    inputs' own rounding leaves it: exactly ``0.0`` for two equal real
-    amplitudes, and ``1.5e-33`` when one arm arrived through the ``exp(1j*pi)``
-    residue that :func:`phase_shifted` documents. Neither number is a
-    guarantee. Compare with a tolerance everywhere, and never assert a dark port
-    is ``== 0.0``.
+    **:math:`\\mu` does not round-trip bit-exactly**, because the state is
+    rebuilt through ``from_mean_photon_number``: a :math:`\\mu` of ``0.2``
+    returns as ``0.19999999999999998``, and an analytically dark port lands
+    wherever the inputs' own rounding leaves it. Compare with a tolerance
+    everywhere, and never assert a dark port is ``== 0.0``.
 
     Examples
     --------
@@ -506,12 +422,9 @@ def click_probability(mean_photon_number: float, *, efficiency: float) -> float:
     Notes
     -----
     **Exact, not an approximation.** Thinning a :math:`\\mathrm{Poisson}(\\mu)`
-    photon number by a per-photon detection probability :math:`\\eta_d` gives
-    :math:`\\mathrm{Poisson}(\\eta_d\\mu)`, so the probability of detecting at
-    least one photon is :math:`1 - e^{-\\eta_d\\mu}` with no truncation and no
-    small-:math:`\\mu` assumption. This is the closed form of the photon-number
-    sampling the coherent source exists to avoid: one uniform draw against this
-    probability, never a photon count.
+    photon number by :math:`\\eta_d` gives
+    :math:`\\mathrm{Poisson}(\\eta_d\\mu)`, so this holds with no truncation and
+    no small-:math:`\\mu` assumption.
 
     **:math:`\\eta_d` is already inside the exponent.** A caller that hands this
     value to a detector must let it *replace* that detector's own efficiency, not
@@ -521,23 +434,12 @@ def click_probability(mean_photon_number: float, *, efficiency: float) -> float:
     like a lossier link, which is the quantity a QKD run is trying to measure.
 
     Computed with ``expm1``, which is accurate where ``1.0 - exp(-x)`` loses
-    every significant digit to cancellation. ``DarkCountProcess.p_at_least_one``
-    is the same closed form over a dark rate and a window duration, and uses
-    ``expm1`` for the same reason.
+    every significant digit to cancellation.
 
-    **The ceiling is reached, and reaching it is not a bug.** The analytic
-    value is strictly below one, but above :math:`\\eta_d \\mu \\approx 37`
-    the difference falls under the double-precision epsilon and this returns
-    exactly ``1.0``. A detector reading that value clicks on every trial
-    without drawing from its efficiency stream, which is correct for a pulse
-    carrying tens of detectable photons -- and, because the draw is skipped,
-    something a later window's stream position depends on.
-
-    **The two floors need no special case.** An analytically dark interferometer
-    port delivers :math:`\\mu \\approx 10^{-33}` -- the ``exp(1j*pi)`` residue,
-    squared -- and total upstream attenuation delivers exactly ``0.0``. Both give
-    a probability at or indistinguishable from zero here, so "no click" comes out
-    of the detector's own statistics rather than out of a branch.
+    **The ceiling is reached.** Above :math:`\\eta_d \\mu \\approx 37` this
+    returns exactly ``1.0``, and a detector reading that value clicks without
+    drawing from its efficiency stream -- which a later window's stream position
+    depends on.
 
     Examples
     --------

@@ -135,15 +135,13 @@ class CoherentPulsePreparationReport:
     record only through the emitted signal's ``state_ref``.
 
     The carrier and encoding phases are recorded **separately** rather than
-    pre-summed. Their sum is already available as
-    ``coherent_state.phase_rad``; keeping them apart is what lets a later
-    analysis attribute a visibility loss to carrier drift rather than encoding.
+    pre-summed, so a later analysis can attribute a visibility loss to carrier
+    drift rather than encoding.
 
-    The applied encoding phase is **not** recoverable from the amplitude.
-    ``CoherentState.phase_rad`` is the total wrapped phase, which already
-    differs from either component once they are summed and differs further after
-    any channel phase noise. Protocol code must read ``encoding_phase_index``
-    from this report, never ``arg(alpha)`` from a received signal.
+    The applied encoding phase is **not** recoverable from the amplitude:
+    ``CoherentState.phase_rad`` is the total wrapped phase. Protocol code must
+    read ``encoding_phase_index`` from this report, never ``arg(alpha)`` from a
+    received signal.
     """
 
     report_id: str
@@ -170,10 +168,8 @@ SourceReport = Union[SourcePreparationReport, CoherentPulsePreparationReport]
 _ReportT = TypeVar("_ReportT", bound=SourceReport)
 """One concrete source report type, tying ``reports`` to ``report``.
 
-``list`` is invariant, so a plain ``list[SourceReport]`` parameter would reject
-the ``list[SourcePreparationReport]`` that both existing sources pass. Binding
-the element type to the report's type accepts each source's own homogeneous list
-and additionally rejects storing one report kind in the other's list.
+``list`` is invariant, so binding the element type is what accepts each source's
+own homogeneous list while rejecting a mixed one.
 """
 
 

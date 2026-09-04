@@ -454,19 +454,16 @@ def run_dps_transmitter_trial(
         afterpulse_decay_ticks=seconds_to_ticks(detector_config.afterpulse_decay_s),
         photon_number_resolving=False,
     )
-    # Index 0 reads out_0, index 1 reads out_1. Two instances rather than one
-    # shared object: dead time and afterpulsing are per-channel state, and one
-    # detector on both ports would couple them.
+    # Index 0 reads out_0, index 1 reads out_1. Two instances, not one
+    # shared: dead time and afterpulsing are per-channel state.
     detectors = (
         SinglePhotonDetector(f"{receiver.device_id}_d0", params=detector_params),
         SinglePhotonDetector(f"{receiver.device_id}_d1", params=detector_params),
     )
 
-    # tau = T. Derived from the same clock the source was built from rather than
-    # configured separately: the interferometer never sees the clock and cannot
-    # check the two against each other, so a second copy could only drift. A
-    # mismatch would show up as temporal_overlap collapsing on every slot, which
-    # is why that value is reported below.
+    # tau = T, derived from the source's own clock rather than configured
+    # separately, which could only drift. A mismatch shows up as
+    # temporal_overlap collapsing on every slot.
     interferometer = DelayInterferometer(
         device_id=receiver.device_id,
         detectors=detectors,
@@ -477,9 +474,8 @@ def run_dps_transmitter_trial(
         ),
     )
     collector = DetectionCollector(device_id="bob_receiver")
-    # Both optical ports must still be terminated: the interferometer always
-    # puts light on both and `_resolve` requires each connection, so an
-    # unwired port is an error rather than an absence.
+    # Both optical ports must still be terminated: an unwired port is an
+    # error, not an absence.
     tap_0 = PulseTap(device_id=f"{receiver.device_id}_out0_tap")
     tap_1 = PulseTap(device_id=f"{receiver.device_id}_out1_tap")
 
@@ -513,9 +509,7 @@ def run_dps_transmitter_trial(
     channel.bind(binding)
     interferometer.bind(binding)
     source.schedule_start(timeline)
-    # The source chains one emission event at a time and stops scheduling past
-    # its stop tick, and the interferometer's last flush is a scheduled event
-    # too, so draining the queue drains the whole train and both end slots.
+    # Draining the queue drains the whole train, including the last flush.
     timeline.run_until_empty()
 
     for sink in sinks:
@@ -528,9 +522,8 @@ def run_dps_transmitter_trial(
 
     interference = interferometer.reports
     optical_bits = dps_optical_differential_bits(interference)
-    # A pulse's arrival at BS1 is the short-arm BS2 tick of the combination that
-    # pulse opened, so these are the arrival ticks with no separate counter kept
-    # for them. They are emission ticks plus the channel delay, uniformly.
+    # A pulse's arrival at BS1 is the short-arm BS2 tick of the combination
+    # it opened, so no separate arrival counter is kept.
     arrival_ticks = tuple(
         report.short_bs2_tick
         for report in interference
@@ -556,10 +549,8 @@ def run_dps_transmitter_trial(
         "pulses_emitted": source.pulse_count,
         "pulses_delivered": len(arrival_ticks),
         "preparation_reports": len(source.reports),
-        # This trial configures no polarization, so this stays at 0. That is a
-        # fact about the configuration; a polarized source prepares one mode
-        # record per pulse. The claim that holds either way is that no photon
-        # number was ever sampled.
+        # 0 here because this trial configures no polarization; a polarized
+        # source prepares one mode record per pulse.
         "qstate_records": timeline.qstate.size(),
         "differential_bits": len(differential_bits),
         "slot_period_ticks": dps_slot_period_ticks(config.clock_hz),
@@ -571,38 +562,33 @@ def run_dps_transmitter_trial(
         "carrier_phase_randomized": randomize_carrier_phase,
         "temporal_mode_sigma_s": config.temporal_mode_sigma_s,
         # --- receiver optics ---------------------------------------------
-        # N pulses give N+1 combinations: the first pulse's short arm and the
-        # last pulse's long arm each meet vacuum and carry no bit.
+        # N pulses give N+1 combinations: the two edge arms meet vacuum.
         "interference_slots": interferometer.interference_count,
         "optical_differential_bits": len(optical_bits),
         # --- detection ---------------------------------------------------
-        # Every slot lands in exactly one of these four, and they sum to
-        # interference_slots. A slot that carries no bit is still a slot.
+        # These four sum to interference_slots.
         "detection_slots": len(slots),
         "edge_slots_dropped": kinds.count("edge"),
         "slots_with_click": kinds.count("click"),
         "slots_no_click": kinds.count("no_click"),
         "slots_double_click": kinds.count("double_click"),
-        # Slots that produced a usable bit. There is no public sifting exchange
-        # here -- Alice's bits are read in-process -- so this is the raw sifted
-        # set, before any error correction or privacy amplification.
+        # Raw sifted set. There is no public sifting exchange here: Alice's
+        # bits are read in-process.
         "sifted_bits": len(sifted),
         "sifted_errors": errors,
         # The number that matters. Alice decoded from alphabet indices on the
         # control plane, Bob from which port fired; two routes, no shared step.
         "qber": (errors / len(sifted)) if sifted else None,
-        # End to end, and deliberately per *pulse* rather than per slot: it is
-        # the fraction of light Alice sent that Bob turned into a detection
-        # event, which is what a link budget is about.
+        # Per *pulse*, not per slot: the fraction of what Alice sent that
+        # became a detection.
         "clicks_per_pulse": (
             raw_clicks / source.pulse_count if source.pulse_count else None
         ),
         "raw_clicks": raw_clicks,
         "detector_efficiency": detector_efficiency,
         "dark_count_rate_hz": dark_count_rate_hz,
-        # Both are the ideal-device statement. An interferometer that loses
-        # light, or a tau that does not match the period, breaks one or the
-        # other and nothing else in this trial would notice.
+        # The ideal-device statement; nothing else here would notice a
+        # lossy interferometer or a mismatched tau.
         "interferometer_mu_in": energy_in,
         "interferometer_mu_out": energy_out,
         "temporal_overlap_min": min(overlaps, default=None),
@@ -621,9 +607,8 @@ def run_dps_transmitter_trial(
         "channel_delivered": channel.delivered_count,
         "channel_lost": channel.lost_count,
         "channel_attenuated": channel.attenuated_count,
-        # The point of the receiver optics: Alice's bits come from alphabet
-        # indices on the control plane, Bob's from which port is bright. They
-        # are computed by different routes and this says whether they agree.
+        # Alice's bits come from alphabet indices, Bob's from which port is
+        # bright: different routes, so this is a QBER not a tautology.
         "optical_bits_match_alice": optical_bits == differential_bits,
         # --- provenance -------------------------------------------------
         "master_seed": master_seed,

@@ -107,15 +107,6 @@ if TYPE_CHECKING:
 
 COMPONENT_KEY = "delay_interferometer"
 
-# The action names live here, in the component module, rather than in a
-# package-level constants module. `detectors/primitives/actions.py` exists
-# because several detector components share a vocabulary -- DetectorArray,
-# QubitReadoutDevice and BellStateAnalyzer all draw from it. This package holds
-# one component, so a separate constants module would be an empty layer
-# indirecting a single reader. `sources/` shows the shape of the eventual move:
-# ACTION_EMIT and ACTION_START sit in `sources/_common.py` because two sources
-# share them. When a second interferometer arrives, these move to an
-# `interferometers/_common.py` the same way -- a rename, not a redesign.
 ACTION_INTERFERE = "interfere"
 """Ingress action: one coherent pulse arriving at BS1."""
 
@@ -290,11 +281,10 @@ class InterferenceReport:
 
     Notes
     -----
-    Like the coherent source's report there is no ``state_ref``, no
-    ``state_targets``, and no sampler field. Interfering two coherent amplitudes
-    creates no quantum state record, and no record arrives to be carried through
-    either: this device refuses any signal carrying a ``state_ref``, so a
-    polarized pulse never reaches BS2. Optical interference of a described mode
+    No ``state_ref``, no ``state_targets``, no sampler field. Interfering two
+    coherent amplitudes creates no quantum state record, and none arrives to be
+    carried through: this device refuses any signal carrying a ``state_ref``, so
+    a polarized pulse never reaches BS2. Optical interference of a described mode
     is not implemented; see ``CAPABILITY_MAP.md`` section 5.
 
     ``interference_index`` counts this device's combinations. Join downstream
@@ -473,71 +463,41 @@ class DelayInterferometer(Component):
     Notes
     -----
     **Beamsplitter convention.** The real 50:50 matrix, stated once at the top of
-    ``components/coherent_optics.py`` and used everywhere including the tests.
-    BS1 with vacuum on its second input gives
+    ``components/coherent_optics.py``. BS1 with vacuum on its second input gives
     :math:`\\alpha_s = \\alpha_\\ell = \\alpha/\\sqrt 2`; BS2 gives port 0 the
     difference and port 1 the sum, so port 0 is dark and port 1 bright when the
     two arms are in phase.
 
-    **One equation, no decision tree.** Every combination goes through the same
-    :func:`~simyuj.components.coherent_optics.interfere` call. Vacuum inputs,
-    orthogonal modes, unequal amplitudes, first pulse, and last pulse are all
-    values of that equation rather than branches around it.
-
     **Event shape.** A pulse arrival does BS1 and, when both contributions have
-    already reached BS2, BS2 as well -- in one event, which is what keeps the
-    :math:`\\tau = T` case free of any same-tick ordering question, since the
-    short arm of pulse *k* and the long arm of pulse *k-1* land on the same tick
-    by design. When the new pulse arrives *before* the held arm has reached BS2,
-    resolving immediately would emit light that has not yet arrived, so the pair
-    is deferred to ``ACTION_RESOLVE_BS2`` at the long arm's BS2 tick. That is
-    reachable whenever the source uses a stochastic timing profile, which
-    shortens the spacing below :math:`\\tau`.
+    already reached BS2, BS2 as well, in one event. When the new pulse arrives
+    *before* the held arm has reached BS2 the pair is deferred to
+    ``ACTION_RESOLVE_BS2`` at the long arm's BS2 tick, which is reachable
+    whenever the source uses a stochastic timing profile. Deferring releases the
+    holder in the same step, so a pulse arriving while a combination is pending
+    interacts only with the holder's new occupant.
 
-    Deferring hands the pair to the scheduled event and releases the holder in
-    the same step, so a pulse arriving while a combination is pending interacts
-    only with the holder's new occupant and cannot disturb it.
-
-    **Never schedule a self-event at delay 0.** Neither self-scheduled action
-    here can land on the tick that scheduled it, and that is a correctness
-    requirement rather than an accident. ``Timeline.pop_batch`` collects the
-    events already queued at a tick and dispatches that batch; an event
-    scheduled *during* the batch, even at the same tick, joins a **later** batch
-    and therefore runs after everything in the current one **regardless of
-    priority**. A delay-0 self-event would silently escape the priority ordering
-    this component relies on. The deferral is safe because it is only reached
-    when the later BS2 tick exceeds the arrival tick, strictly; the flush is safe
-    because :math:`\\tau \\ge 1` tick makes ``arrival + 2\\tau + 1`` at least
-    three ticks away.
+    **Never schedule a self-event at delay 0.** ``Timeline.pop_batch`` dispatches
+    the batch already queued at a tick, so an event scheduled *during* that batch
+    joins a later one and runs after it **regardless of priority** -- silently
+    escaping the ordering this component relies on. Neither self-scheduled action
+    here can land on its own tick. See ``docs/dev/dps-design.md`` section 6.
 
     **The deadline is the nearest-neighbour assumption, not a decay estimate.**
     A held arm's deadline is ``arrival + 2 * tau``: one further slot opportunity
     has passed, so it is no longer a pair candidate. This is *not* a claim that
     :math:`\\gamma` has become negligible -- at :math:`\\sigma = \\tau` the
-    discarded overlap is still about ``0.78``, which a test asserts so the
-    assumption stays visible in the suite. Energy is conserved either way.
+    discarded overlap is still about ``0.78``, which a test asserts. Energy is
+    conserved either way.
 
-    **The flush event fires one tick after that deadline**, at
-    ``arrival + 2 * tau + 1``. That extra tick is **ordering margin, not
-    physics**. Priority alone would be sufficient today -- both contenders are
-    queued long before their batch is popped, so ``(time, priority, event_id)``
-    decides and ``flush_priority`` wins it. But ``flush_priority`` is only
-    meaningful *relative to* ``QuantumChannel.delivery_priority``, configured on
-    a different component; someone raising that for an unrelated reason would
-    silently invert this device's pairing and the failure would surface as a
-    wrong key rather than an error. Ordering on ``time`` is the one thing they
-    cannot reconfigure. The observable consequence is that the last tick on
-    which a pulse still pairs is ``arrival + 2 * tau + 1``, not
-    ``arrival + 2 * tau``: a pulse landing exactly on the flush tick is
-    processed first, by priority, and pairs at :math:`\\Delta t = \\tau + 1`
-    ticks. One tick later it does not, and both it and the flushed arm meet
-    vacuum in separate combinations.
+    The flush fires one tick after that deadline, at ``arrival + 2 * tau + 1``,
+    as ordering margin rather than physics, so the last tick on which a pulse
+    still pairs is ``arrival + 2 * tau + 1``. See ``docs/dev/dps-design.md``
+    section 6.
 
-    **Outputs are new optical events**, so they get new identities rather than
-    inheriting a pulse's. Two amplitudes go in and two different optical modes
-    come out; there is no one signal to preserve. Both incoming pulse indices
-    travel in the outgoing metadata and in the report instead. This follows
-    ``QuantumMemory._make_emitted_signal`` rather than an in-flight transform.
+    **Outputs are new optical events** and get new identities: two amplitudes go
+    in and two different optical modes come out, so there is no one signal to
+    preserve. Both incoming pulse indices travel in the outgoing metadata and in
+    the report.
 
     **Outputs are intensity-exact and mode-truncated.** At :math:`|\\gamma| < 1`
     the field leaving a port is a superposition of two non-identical envelopes.
@@ -552,11 +512,8 @@ class DelayInterferometer(Component):
     ``CAPABILITY_MAP.md`` section 5.
 
     **All the randomness is the detectors'.** The optics sample nothing, so at
-    ``detectors=None`` ``bind`` declares no RNG stream at all rather than one
-    that is never consumed. With detectors fitted the streams are theirs, on the
-    four-segment path ``bind_detector_rngs`` builds. Stream values derive from
-    the stream path rather than creation order, so fitting detectors cannot
-    perturb any other component's draws.
+    ``detectors=None`` ``bind`` declares no RNG stream at all. Fitting detectors
+    cannot perturb any other component's draws.
 
     A run must extend to ``last_arrival + 2 * tau + 1`` for the final flush, and
     to any outstanding pending resolution tick, or those combinations never

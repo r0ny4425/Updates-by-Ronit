@@ -45,15 +45,12 @@ class DPSAliceSourceConfig:
 
     wavelength_nm: float = 1550.0
 
-    # Field-envelope standard deviation of each pulse. Not converted to ticks:
-    # a continuous width would be quantized to integer picoseconds and any
-    # overlap computed from it downstream would be quantized with it.
+    # Not converted to ticks: quantizing a continuous width would quantize any
+    # overlap computed from it downstream.
     temporal_mode_sigma_s: float = 30e-12
 
-    # Carrier phase. Held fixed for the whole train, which is what makes the
-    # differential phase carry the encoding alone -- Theta_n - Theta_{n-1} is
-    # exactly zero. This also means infinite laser coherence length; finite
-    # linewidth is not modelled. See the run report.
+    # Held fixed for the whole train, so the differential phase carries the
+    # encoding alone. Implies infinite laser coherence length.
     carrier_phase_rad: float = 0.0
 
 
@@ -94,17 +91,11 @@ class DPSDetectorConfig:
     # A good InGaAs APD or a modest SNSPD at 1550 nm.
     efficiency: float = 0.6
 
-    # Dark counts per second per detector. With the 500 ps window below this is
-    # 5e-8 events per slot per detector, which is why a default run measures a
-    # QBER of exactly zero rather than a small one. `demo.py` exposes the knob
-    # so the effect can be made visible.
+    # 5e-8 events per slot against the 500 ps window below, which is why a
+    # default run measures a QBER of exactly zero.
     dark_count_rate_hz: float = 100.0
 
-    # 10 ns, not BB84's 50 ns. BB84 runs a 100 MHz source, where 50 ns is five
-    # slots; DPS runs at 1 GHz, where it would be fifty and would swallow most
-    # of the train. 10 ns is a fast SNSPD and still costs real slots at this
-    # clock -- the summary reports how many, because it is physics, not a knob
-    # chosen to make a number look good.
+    # 10 ns, not BB84's 50 ns: at this clock 50 ns would be fifty slots.
     dead_time_s: float = 10e-9
 
     jitter_stddev_s: float = 50e-12
@@ -115,12 +106,8 @@ class DPSDetectorConfig:
     # Half a slot at 1 GHz, so one slot's window cannot reach into the next.
     detection_window_s: float = 500e-12
 
-    # What a slot reports when both ports fire. "fail" discards it: both
-    # detectors seeing light means the interferometer said nothing, and a
-    # discarded slot is honest where a guess is not. "random" is the BB84
-    # choice and would instead assign a bit that is wrong half the time,
-    # feeding a real error rate into the QBER. The rate itself is physics and
-    # belongs to the two ports; only this response is protocol.
+    # "fail" discards a double click; "random" would assign a bit that is wrong
+    # half the time. The rate is physics, this response is protocol.
     double_click_policy: str = "fail"
 
 
@@ -142,15 +129,10 @@ class DPSChannelConfig:
 
     channel_id: str = "alice_to_bob"
 
-    # 10 km of standard fibre. At the repository's default propagation speed of
-    # 2e8 m/s this is a 50 us delay, which is 5e7 ticks -- far longer than the
-    # whole pulse train, and harmless: the train arrives intact, just later.
     length_m: float = 10_000.0
 
-    # Real standard fibre at 1550 nm is about 0.2 dB/km. Zero here on purpose;
-    # see the class docstring. On the coherent path this is a *power*
-    # transmission applied deterministically -- alpha -> sqrt(eta) * alpha --
-    # with no Bernoulli trial and no RNG consumed.
+    # Zero on purpose; see the class docstring. On the coherent path this is a
+    # *power* transmission applied deterministically, with no Bernoulli trial.
     attenuation_db_per_km: float = 0.0
 
     # Per-pulse optical phase noise. Zero here on purpose. Non-zero destroys

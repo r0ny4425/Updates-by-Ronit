@@ -492,12 +492,7 @@ class QuantumChannel(Component):
         Notes
         -----
         The two transport models are split on the **role** a signal's qstate
-        record plays, not on whether it has one. A record whose handle is
-        ``"qubit"`` *is* the carrier and faces the Bernoulli survival trial; a
-        record whose handle is ``"mode"`` merely describes the mode a classical
-        amplitude occupies, and loss scales that amplitude instead. Gating loss
-        on ``state_ref is not None`` would subject a polarization state to
-        probabilistic annihilation and look exactly like an ordinary lossy link.
+        record plays, not on whether it has one -- see ``qstate_payload_role``.
         """
         role = qstate_payload_role(signal)
 
@@ -518,11 +513,6 @@ class QuantumChannel(Component):
                 "cannot travel alone"
             )
 
-        # ------------------------------------------------------------------
-        # Qstate carrier path. Unchanged; every signal in the simulator today
-        # takes it, and it is deliberately not restructured around the branch
-        # above so that its behaviour stays byte-identical.
-        # ------------------------------------------------------------------
         self._received_count += 1
 
         targets = qstate_targets_from_signal(signal)
@@ -696,21 +686,15 @@ class QuantumChannel(Component):
 
         Notes
         -----
-        Attenuation is **arithmetic, not a trial**. ``_is_lost`` is never called
-        here and the loss stream is never consumed, so an all-amplitude run
-        replays identically whatever the fibre loss is. A Bernoulli draw on this
-        path would reintroduce exactly the per-slot photon-number sampling the
-        coherent source exists to avoid.
-
-        ``eta`` is one physical property of the fibre with two correct
-        consequences: a survival probability for a single photon, and a power
-        transmission for an amplitude. There is no second loss field.
+        Attenuation is **arithmetic, not a trial**: the loss stream is never
+        consumed, so an all-amplitude run replays identically whatever the fibre
+        loss is. ``eta`` is one fibre property with two correct consequences --
+        a survival probability for a photon, a power transmission for an
+        amplitude -- so there is no second loss field.
 
         Nothing is discarded, so ``lost_count`` stays 0 and
         ``delivered_count == received_count`` however lossy the fibre is.
-        Reading ``lost_count == 0`` as "lossless" is a trap; total attenuation
-        delivers coherent vacuum on time, and deciding no photon was seen is the
-        detector's job.
+        Reading ``lost_count == 0`` as "lossless" is a trap.
         """
         self._received_count += 1
         self._require_coherent_transport_supported(role=role)
@@ -731,9 +715,6 @@ class QuantumChannel(Component):
             state = phase_shifted(state, phase_rad=phase_noise_rad)
 
         if role is not None and self.noise_models:
-            # A "mode" record takes Kraus noise through the same call and the
-            # same operators a qubit carrier does. The only thing this path does
-            # differently is skip the loss trial above.
             timeline.qstate.apply_noise_models(
                 self.noise_models,
                 targets=qstate_targets_from_signal(signal),

@@ -1574,6 +1574,27 @@ the first time:
   Assert that number in a test so the assumption is visible in the suite. A pulse
   arriving at exactly `arrival + 2*tau` is processed before the flush and **does**
   pair, at Δt = τ; one tick later it does not. Energy is conserved either way.
+- **Never schedule a self-event at delay 0.** `Timeline.pop_batch` collects the
+  events already queued at a tick and dispatches that batch; an event scheduled
+  *during* that batch, even at the same tick, joins a later batch and runs after
+  everything in the current one **regardless of priority**. A delay-0 self-event
+  would silently escape the priority ordering this component relies on. The
+  deferral is safe because it is reached only when the later BS2 tick strictly
+  exceeds the arrival tick; the flush is safe because `tau >= 1` tick puts
+  `arrival + 2*tau + 1` at least three ticks away.
+
+- **The flush fires one tick after the deadline**, at `arrival + 2*tau + 1`, and
+  that extra tick is ordering margin rather than physics. Priority alone would
+  do today — both contenders are queued long before their batch is popped, so
+  `(time, priority, event_id)` decides and `flush_priority` wins. But
+  `flush_priority` is only meaningful *relative to*
+  `QuantumChannel.delivery_priority`, configured on a different component;
+  someone raising that for an unrelated reason would silently invert this
+  device's pairing, and the failure would surface as a wrong key rather than an
+  error. Ordering on `time` is the one thing they cannot reconfigure. The
+  observable consequence is that the last tick on which a pulse still pairs is
+  `arrival + 2*tau + 1`, not `arrival + 2*tau`.
+
 - `flush_priority` (10000) must stay **strictly** above the upstream
   `delivery_priority` (0). Equality is *worse* than inversion: the tie falls to
   `event_id`, so the outcome depends on scheduling order. Pin all three cases,

@@ -11,10 +11,8 @@ and an encoding phase, builds the amplitude
 and emits a ``SignalKind.PULSE`` signal carrying that :class:`CoherentState`.
 When a polarization selector is configured it also chooses **which mode that
 amplitude occupies**, and prepares a one-qubit qstate record describing it.
-There is no separate modulator component: the phase choice happens where
-:math:`\\mu` is already being chosen, so a second component would only add an
-event hop, a second signal-identity question, and a report describing a phase
-this source already knows.
+There is no separate modulator component; see ``docs/dev/dps-design.md``
+section 5.
 
 The amplitude is **non-sampling in the quantum sense**. The source never draws a
 photon number and never decides per slot whether a pulse exists. At
@@ -37,14 +35,10 @@ Choosing *which* :math:`\\mu` to prepare is a classical preparation choice and i
 sampled freely; that is what a decoy-state transmitter does. Sampling a photon
 number is not, and nothing here calls ``rng.poisson``.
 
-Contrast with ``SinglePhotonSource``, which models zero-or-one photon emission
-backed by a one-qubit qstate that *is* the carrier. The two are different
-physical objects and neither replaces the other. In particular this source has
-**no** ``emission_probability`` -- a laser fires every slot; whether a photon is
-*seen* is the detector's problem -- and no ``noise_models``, because Kraus
-operators act on qubit axes and have no representation for an optical amplitude.
-Noise on a polarization mode is available, but it belongs to the channel that
-carries the pulse rather than to the source that prepared it.
+Unlike ``SinglePhotonSource`` this source has **no** ``emission_probability``
+-- a laser fires every slot -- and no ``noise_models``: Kraus operators act on
+qubit axes and have no representation for an optical amplitude. Noise on a
+polarization mode belongs to the channel, not the source.
 
 Not modelled
 ------------
@@ -156,11 +150,9 @@ class WeakCoherentPulseSource(Component):
     polarization : PolarizationSelector or None, default=None
         Per-pulse polarization-mode policy, or ``None`` for a source that models
         no polarization at all. ``None`` is not "unpolarized light": it is the
-        statement that this run does not describe the mode, which is what DPS
-        and COW want, and it is the only configuration under which the source
-        creates no qstate record. **No selector implementing this protocol
-        ships**; the parameter, the report fields, and the RNG stream exist so a
-        decoy-BB84 alphabet is one new class in ``coherent_preparation.py``.
+        statement that this run does not describe the mode, and it is the only
+        configuration under which the source creates no qstate record. **No
+        selector implementing this protocol ships.**
     temporal_mode_sigma_s : float or None, default=None
         Positive field-envelope standard deviation of each emitted pulse, in
         seconds, defined by
@@ -192,11 +184,9 @@ class WeakCoherentPulseSource(Component):
     emission_period_ticks : int
         Slot period in simulation ticks.
     pulse_count : int
-        Number of pulses emitted so far. The standard debug counters assume
-        qstate-backed signals, so this is the source's own counter rather than
+        Number of pulses emitted so far. The source's own counter, not
         ``timeline.qstate.size()`` -- which is ``0`` for an unpolarized run and,
-        for a polarized one, counts mode records rather than pulses. The two
-        agree today only because nothing retires a mode record.
+        for a polarized one, counts mode records rather than pulses.
 
     Notes
     -----
@@ -209,59 +199,37 @@ class WeakCoherentPulseSource(Component):
     ``SubsystemHandle(kind="mode")`` describing the occupied mode.
 
     Signal metadata carries identity only -- ``source_device_id`` and
-    ``pulse_index``. The preparation choices are deliberately **not** put there:
-    they travel in ``CoherentPulsePreparationReport`` on the local control
-    plane, so a downstream device cannot read a sender's private choice off a
-    signal in flight. ``SinglePhotonSource`` does place its sampler choice in
-    signal metadata; this source does not follow it there.
-
-    The report is the one place a Jones vector *is* recorded beside the qstate
-    record, and that is not the same duplication. A report is a frozen note of a
-    choice made at emission time on the control plane; it never travels, and
-    nothing downstream updates it, so there is nothing for it to fall out of
-    step with. It records ``polarization`` beside ``polarization_index`` for the
-    same reason it records ``encoding_phase_rad`` beside
-    ``encoding_phase_index``.
+    ``pulse_index``. The preparation choices travel in
+    ``CoherentPulsePreparationReport`` on the local control plane instead, so a
+    downstream device cannot read a sender's private choice off a signal in
+    flight. The report is the one place a Jones vector is recorded beside the
+    qstate record; it never travels and nothing updates it, so it cannot fall
+    out of step.
 
     ``bind`` declares five deterministic RNG streams under the component key
     ``"weak_coherent_pulse_source"``: ``"timing"``, ``"intensity"``,
     ``"carrier"``, ``"encoding"``, and ``"polarization"``. All five are declared
     unconditionally, because ``Timeline.rng`` refuses a new stream once
-    execution begins, and declaring one costs nothing -- stream values derive
-    from the stream path, never from creation order or stream count.
-    ``bind_source_rngs`` is not used: it binds ``"emission"``, ``"state"``,
-    ``"timing"`` positionally, two of which this source would declare and never
-    draw, and widening it would change a signature both existing sources depend
-    on.
+    execution begins.
 
-    Each selector draws from its own stream, so adding decoy intensity levels
-    later cannot shift the encoding-phase draw sequence and break replay of an
-    existing run. **Polarization has its own stream for exactly that reason and
-    must not be folded into ``"encoding"``**: sharing one would make every
-    polarized pulse consume a draw that an unpolarized run does not, shifting
-    the encoding-phase sequence and breaking replay of every DPS run recorded
-    before polarization existed. With ``DeltaTiming``, ``FixedIntensity``,
-    ``FixedCarrierPhase``, ``FixedPhase``, and no polarization selector -- the
-    default configuration apart from the required intensity -- the source
-    consumes no randomness at all and replays identically at any
-    ``master_seed``.
+    **Each selector draws from its own stream, and polarization must not be
+    folded into ``"encoding"``.** Sharing one would make every polarized pulse
+    consume a draw an unpolarized run does not, shifting the encoding-phase
+    sequence and breaking replay of runs recorded before it. With the default
+    selectors and no polarization the source consumes no randomness at all and
+    replays identically at any ``master_seed``.
 
-    Every active slot emits exactly one pulse; there is no emission Bernoulli
-    and therefore no attempt/emission counter split. ``mean_photon_number = 0``
-    is how an empty slot is expressed, and it emits a real coherent-vacuum
-    pulse: a signal, a delivery, and a report. It is not a skipped slot, and
-    ``pulse_count`` counts it.
+    Every active slot emits exactly one pulse; there is no emission Bernoulli.
+    ``mean_photon_number = 0`` emits a real coherent-vacuum pulse -- a signal, a
+    delivery and a report -- not a skipped slot, and ``pulse_count`` counts it.
 
     The source uses the shared chained one-event scheduler. Timing profiles must
     expose finite ``max_emission_delay_ticks`` strictly smaller than the slot
     period, so a delayed pulse cannot overrun a later nominal slot.
 
-    A pulse's *arrival* is a point event in a slot: emission times are integer
-    ticks and the envelope does not move them. ``temporal_mode_sigma_s``
-    describes the envelope around that point and is a separate quantity from
-    both the slot period and ``duration_s``. It is **not** converted with
-    ``seconds_to_ticks``: that helper rounds to integer picoseconds, which would
-    quantize any overlap computed downstream from it.
+    ``temporal_mode_sigma_s`` is **not** converted with ``seconds_to_ticks``:
+    that helper rounds to integer picoseconds, which would quantize any overlap
+    computed downstream from it.
     """
 
     device_id: str
@@ -276,14 +244,8 @@ class WeakCoherentPulseSource(Component):
     carrier_phase: CarrierPhaseSelector = field(default_factory=FixedCarrierPhase)
     encoding_phase: EncodingPhaseSelector = field(default_factory=FixedPhase)
 
-    # Appended after the selectors rather than grouped with the other optical
-    # properties, following the same rule as Signal.temporal_mode_sigma_s.
+    # Both appended rather than grouped; see docs/dev/dps-design.md section 2.
     temporal_mode_sigma_s: Optional[float] = None
-
-    # Appended last rather than filed with the other three selectors, for the
-    # same reason: inserting it into the middle would shift the positional index
-    # of temporal_mode_sigma_s, and "is any call site constructing this source
-    # positionally?" is a question worth never having to answer.
     polarization: Optional[PolarizationSelector] = None
 
     output_port: Port = field(init=False)
@@ -308,8 +270,6 @@ class WeakCoherentPulseSource(Component):
         ensure_nonempty_id(self.device_id, field_name="device_id")
         self.emission_period_ticks = emission_period_ticks(self.frequency_hz)
 
-        # validate_source_scalars is not reused: its signature requires an
-        # emission_probability this source does not have.
         if not isinstance(self.encoding_scheme, EncodingScheme):
             raise TypeError("encoding_scheme must be EncodingScheme")
 
@@ -369,17 +329,10 @@ class WeakCoherentPulseSource(Component):
         Notes
         -----
         Binding is idempotent for the same timeline and rejected for a
-        different one, matching ``SinglePhotonSource`` and
-        ``EntangledPairSource``. All five streams are declared even when the
-        configured selectors draw from none of them, because ``Timeline.rng``
-        refuses a new stream once the timeline freezes.
-
-        ``"polarization"`` is declared unconditionally for that reason and not
-        gated on ``self.polarization is not None``: a source configured without
-        polarization would otherwise have no path to declare, and a selector
-        could never be added to a running timeline. Declaring it is free --
-        stream values derive from the stream path, never from creation order or
-        stream count -- so this does not perturb the other four.
+        different one. All five streams are declared even when the configured
+        selectors draw from none of them -- including ``"polarization"``,
+        because ``Timeline.rng`` refuses a new stream once the timeline
+        freezes and a selector could otherwise never be added.
         """
         if not isinstance(context, BindingContext):
             raise TypeError("context must be BindingContext")
@@ -524,31 +477,15 @@ class WeakCoherentPulseSource(Component):
 
         Notes
         -----
-        This is the "specification becomes record" step, and it lives in the
-        source rather than the selector on purpose. ``PolarizationSelection``
-        names *what to prepare* and never sees a timeline, exactly as
-        ``StateSampler`` does for ``SinglePhotonSource``; the source owns the
-        resulting reference. That seam is what lets one selector instance drive
-        several sources, and it keeps a "descriptor or reference" branch off the
-        emit path.
+        **The handle is stamped ``kind="mode"``.** ``qstate_payload_role`` reads
+        it to decide that channel loss must scale the amplitude rather than roll
+        a survival trial against this record. ``SubsystemHandle`` defaults to
+        ``"qubit"``, so forgetting the stamp would silently make the
+        polarization state the carrier.
 
-        ``rep="ket"`` is not configurable: a Jones vector is a pure
-        two-dimensional state and there is no other representation it could name.
-        A ``NoiseModel`` applied later converts the record to density through
-        ``apply_noise_models``' own auto-conversion, so nothing is foreclosed.
-
-        The handle is stamped ``kind="mode"``. That is the load-bearing part:
-        ``qstate_payload_role`` reads it to decide that channel loss must scale
-        the amplitude rather than roll a survival trial against this record.
-        ``SubsystemHandle`` defaults to ``"qubit"``, so forgetting the stamp
-        would silently make the polarization state the carrier.
-
-        The subsystem is named ``"{device_id}:mode:{pulse_index}"``, parallel to
-        ``SinglePhotonSource``'s ``":photon:"`` and to this source's own signal
-        ids. **Nothing retires these records.** One per pulse accumulates for
-        the length of the run; see ``docs/dev/dps-design.md`` section 7.1 for
-        the measured ceiling. An unpolarized run allocates none, which is why
-        the default configuration has no such ceiling.
+        **Nothing retires these records.** One per pulse accumulates for the
+        length of the run; see ``docs/dev/dps-design.md`` section 7.1 for the
+        measured ceiling. An unpolarized run allocates none.
         """
         if polarization is None:
             return None, ()
@@ -591,13 +528,11 @@ class WeakCoherentPulseSource(Component):
         ``timeline.qstate`` is touched only when a polarization selector is
         configured, and then exactly once per pulse. The output port is required
         before any selector runs, so an unconnected source raises without
-        perturbing the RNG streams or leaving an orphaned mode record behind.
+        perturbing the RNG streams.
 
         The selectors receive the **zero-based** pulse counter; the report
-        records the one-based index. The three phase and intensity values are
-        summed into a single amplitude here, and neither phase is recoverable
-        from it afterwards -- ``CoherentState.phase_rad`` is the total wrapped
-        phase. Everything a protocol needs to decode later is in the report.
+        records the one-based index. Neither phase is recoverable from the
+        amplitude afterwards -- everything a protocol needs is in the report.
         """
         connection = require_connection(self.output_port)
 
@@ -619,10 +554,6 @@ class WeakCoherentPulseSource(Component):
             selection_index,
             self._encoding_rng,
         )
-        # Drawn with the other three because it is a preparation choice like
-        # them, from its own stream so that configuring it cannot shift theirs.
-        # A pure selection, not a qstate record: the record is built below, once
-        # the pulse index that names it exists.
         polarization = (
             None
             if self.polarization is None
@@ -693,17 +624,15 @@ class WeakCoherentPulseSource(Component):
                 "connection_id": connection.connection_id,
                 "emission_slot_tick": emission_slot_tick,
                 "emission_delay_ticks": emission_delay_ticks,
-                # Derived floats, never the raw complex amplitude: the JSONL
-                # sink has no `complex` case and would fall back to repr().
+                # Derived floats only: the JSONL sink has no `complex` case.
                 "mean_photon_number": coherent_state.mean_photon_number,
                 "phase_rad": coherent_state.phase_rad,
                 "carrier_phase_rad": carrier_phase_rad,
                 "encoding_phase_rad": encoding.phase_rad,
                 "encoding_phase_index": encoding.index,
                 "intensity_index": intensity.index,
-                # The alphabet index and the record reference, never the Jones
-                # vector itself: its components are `complex`, which the JSONL
-                # sink has no case for and would fall back to repr().
+                # The alphabet index, never the Jones vector: `complex` has
+                # no JSONL case.
                 "polarization_index": (
                     None if polarization is None else polarization.index
                 ),
@@ -729,10 +658,6 @@ class WeakCoherentPulseSource(Component):
                 carrier_phase_rad=carrier_phase_rad,
                 encoding_phase_rad=encoding.phase_rad,
                 encoding_phase_index=encoding.index,
-                # Recorded here and not on the signal. A report is a frozen note
-                # of a choice made at emission time; nothing downstream updates
-                # it, so it cannot fall out of step with the qstate record the
-                # way a field travelling on the signal would.
                 polarization=None if polarization is None else polarization.jones,
                 polarization_index=(
                     None if polarization is None else polarization.index

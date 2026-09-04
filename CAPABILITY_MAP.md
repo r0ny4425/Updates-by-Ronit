@@ -432,17 +432,29 @@ approximation or a new component:
   timing resolution — time-bin discrimination finer than a slot, a COW monitor
   line, a jitter-limited QBER budget — is therefore not modelled.
 
-  This is blocked on a real defect rather than merely unwritten. Every timing
-  term in `SinglePhotonDetector` is currently non-negative (`_apply_jitter`
-  clamps at `max(0, ...)`), which makes the window filter's lower bound at
-  `single_photon.py:193` dead code and the whole-window dead-time gate at `:174`
-  conservative-only. An arrival offset is **signed** — the envelope is symmetric
-  about the pulse tick, by the contract on `Signal.temporal_mode_sigma_s` — so
-  adding one would make that filter silently discard early-arriving photons,
-  about half the envelope, with no error and no symptom beyond an efficiency
-  quietly too low. There is a second pre/post-jitter mix in the afterpulse model
-  (`elapsed_ticks < 0` returns `None` silently). Fix the asymmetry first, with a
-  fingerprint test, then add the term.
+  **The reported spread is not merely absent, it is understated**, so a timing
+  histogram out of this simulator is wrong in shape and not only in offset.
+  Measured against the correct `N(0, sigma^2/2) + latency + N(0, jitter^2)`:
+  at the shipped DPS config (`sigma = 30`, `jitter_stddev = 50` ticks) the
+  reported standard deviation is 29.2 ticks against 54.3, **46% too narrow**;
+  at `sigma >> jitter` (200 against 20) it is 11.7 against 142.9, **12x too
+  narrow**. The mean is late by `jitter_stddev / sqrt(2*pi)` — 19.95 ticks at
+  the shipped config, 2.0% of a 1 GHz slot — because `_apply_jitter` clamps at
+  `max(0, ...)`, which collapses **about half of all draws onto exactly zero**
+  rather than shifting a distribution.
+
+  The window compounds it: it opens at the arrival tick, which by the contract
+  on `Signal.temporal_mode_sigma_s` is the envelope *centre*, and extends
+  forward, so **the leading half of every pulse lies outside the gate**.
+
+  This is blocked on a real defect rather than merely unwritten, and **no
+  partial fix is safe** — each one alone silently discards 31–50% of clicks.
+  Every timing term in `SinglePhotonDetector` is currently non-negative, which
+  makes the window filter's lower bound at `single_photon.py:212` dead code and
+  the whole-window dead-time gate at `:192` conservative-only; there is a second
+  pre/post-jitter mix in the afterpulse model (`elapsed_ticks < 0` at `:400`
+  returns `None` silently, and skips an RNG draw). The decision, the loss table
+  and the fix order are in `docs/dev/dps-design.md` section 6, step 5.
 - **Envelope shape out of an interferometer.** At `|gamma| < 1` each output port
   carries an interfering component plus an orthogonal residual: the true
   envelope is a superposition of two Gaussians `delta_ticks` apart, and the

@@ -72,12 +72,27 @@ as `1 - exp(-eta*mu)` — one uniform draw against a probability, never a count.
 | `edge_slots_dropped` | exactly `2` — the first pulse's short arm and the flush each meet vacuum |
 | `slots_with_click` + `slots_no_click` + `slots_double_click` + `edge_slots_dropped` | `interference_slots` |
 | `qber` | **`0.0`** — lossless, noiseless, and dark counts are 5e-8 per slot |
-| `clicks_per_pulse` | about `0.072` |
+| `clicks_per_pulse` | about `0.072` — **measured 2.72% low**, see below |
 
 The QBER is exactly zero rather than merely small, and that is a statement about
 the wiring rather than a claim about physics: what limits it is dark counts, and
 at 100 Hz against a 500 ps window there are effectively none. Turn them up and
 it moves.
+
+**`clicks_per_pulse` carries a known systematic: it is 2.72% low** (8 sigma over
+8 seeds x 200k slots). `_apply_jitter` clamps at `max(0, ...)`, biasing every
+click 19.95 ticks late, and `dead_until` is set from that biased timestamp while
+the gate that reads it uses an unjittered one. Dead time is 10 whole slots, so
+any jitter above zero — about half of clicks — tips `dead_until` past a slot
+boundary and costs a full extra 1000-tick slot. Effective dead time is 476 ticks
+longer than the configured 10000, **4.76% inflated**.
+
+That systematic currently sits inside the reconciliation of this number against
+`(p/2)/(1 + (p/2)*10)` recorded in commit `2f39918`, which claims agreement to
+about 0.4% — a band narrower than the error it contains. Nothing else in this
+example reads a click timestamp: bits come from the port label and the counters
+from click counts, so the bias reaches no other reported number.
+See `CAPABILITY_MAP.md` section 5 and `docs/dev/dps-design.md` section 6, step 5.
 
 ## Each imperfection breaks something different
 

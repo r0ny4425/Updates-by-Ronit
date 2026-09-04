@@ -1675,6 +1675,66 @@ rediscover them:**
 - `temporal_overlap` travels in the signal meta and the report; step 6 wants it for
   a visibility budget.
 
+#### Detection-time placement — decided, and why no partial fix is safe
+
+Measured by `scratch/probe_detector_timing.py` and its siblings against the
+shipped code path; derivations stay there.
+
+**Decided: the detection window opens *before* the arrival tick**, computed
+locally in the detector as `[t - offset, t - offset + width)` with `offset`
+roughly half the width, so the envelope sits centred in the gate. `t - offset`
+clamps at simulation tick 0. Nothing schedules an event in the past — the
+detector computes the interval when the arrival event fires.
+
+**Rejected: redefining a signal's tick to mean the pulse start.** Two reasons.
+The interferometer's `gamma = exp(-delta_t^2 / (4*sigma^2))` is centre-to-centre
+by derivation, so a start-edge reading gives a wrong `delta_t` whenever two
+pulses have different widths. And a Gaussian has no start, so any start
+convention needs a fabricated truncation constant that would then appear in
+every timing calculation in the simulator. The detector is the only component
+that needs to know where a pulse begins, so the offset belongs there and
+nowhere else.
+
+**The window's *width* is a hardware gate parameter and stays ~8 sigma. Only
+its start moves.** Today it brackets nothing; it should bracket the centre.
+
+**Why the order is forced.** Fraction of clicks silently discarded by the filter
+at `single_photon.py:212`, at the shipped config:
+
+| change | lost early | lost late | total |
+|---|---:|---:|---:|
+| shipped | 0.00% | 0.00% | **0.00%** |
+| jitter clamp alone | 49.59% | 0.00% | **49.59%** |
+| envelope draw alone | 30.78% | 0.00% | **30.78%** |
+| both, window unmoved | 49.66% | 0.00% | **49.66%** |
+| both + window centred | 0.00% | 0.00% | **0.00%** |
+
+The loss is **silent**: the filter drops them with no error, and it reads as a
+uniformly reduced efficiency — indistinguishable from a lossier link, which is
+the quantity a QKD run is trying to measure.
+
+**Two guards are dead today and a partial fix makes them live:**
+
+- the lower bound `tick <= candidate.time` at `:212`. Every candidate is
+  currently `>= tick` — signal (`time + max(0, ...)`), dark
+  (`start_time + offset`, offsets non-negative), afterpulse
+  (`[time, time + window - 1]`). Measured 0 of 50 000 early clicks.
+- `elapsed_ticks < 0` at `:400`, unreachable because `:192` blocks any window
+  starting before `dead_until`. When it does fire it returns `None` **and skips
+  `afterpulse_rng.random()`**, shifting that stream for every later window.
+
+**Fix order.** 1. window placement; 2. the jitter clamp (latency plus a signed
+`normal(0, s)`, same single draw, so stream positions hold); 3. the envelope
+draw at `N(0, sigma/sqrt(2))`, which needs `temporal_mode_sigma_s` threaded to
+the detector — `DetectorExposure` carries no width today — and a new RNG stream,
+so a determinism review under `CLAUDE.md` invariant 1; 4. the two guards.
+
+**The one thing step 1 has to settle:** `active_detection_duration_at_arrival`
+in `components/detectors/primitives/window.py` measures gate time *forward* from
+an arrival tick and clips to `gate_window.end - time`. Moving the window start
+changes its contract with `GateModel`, and that is a decision rather than a
+mechanical edit.
+
 ### Step 6 — agents, trial, reporting
 
 `configs.py`, `helpers.py`, `agents.py`, `trial.py`, `reporting.py`, `demo.py`

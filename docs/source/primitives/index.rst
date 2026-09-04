@@ -25,6 +25,7 @@ Module Pages
    :maxdepth: 2
    :titlesonly:
 
+   Coherent State <coherent_state>
    Identifiers <ids>
    Metadata <meta>
    Subsystems <subsystems>

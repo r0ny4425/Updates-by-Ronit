@@ -9,13 +9,31 @@ consumes the references carried here.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from enum import Enum
 from typing import Any, Optional, TypeAlias, Union
 from uuid import UUID
 
+from simyuj.primitives.coherent_state import CoherentState
 from simyuj.primitives.ids import _require_optional_correlation_id
 from simyuj.primitives.subsystems import SubsystemHandle
+from simyuj.primitives.validation import require_optional_positive_real
+
+
+class _Keep:
+    """Sentinel type meaning "leave this field alone" in ``Signal._derived``."""
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return "_KEEP"
+
+
+_KEEP = _Keep()
+"""Passed to :meth:`Signal._derived` to leave a field unchanged.
+
+Distinct from ``None``, which is a legal field value and clears one.
+"""
 
 
 class SignalKind(Enum):
@@ -185,6 +203,29 @@ class Signal:
     validation_flag: bool = True
     "Whether to run construction-time validation."
 
+    # Appended last, not grouped with wavelength_nm. Do not tidy them into
+    # place; see docs/dev/dps-design.md section 2.
+
+    coherent_state: Optional[CoherentState] = None
+    """Optical amplitude carried by this signal, or ``None``.
+
+    The amplitude is not a qubit, and it is independent of any qstate-backed
+    degree of freedom the signal may also carry: a pulse may carry only this,
+    with ``state_ref`` and ``state_targets`` empty, or this together with a
+    ``state_ref``, as a weak coherent pulse carrying polarization does. Mean
+    photon number and phase are derived from
+    :class:`~simyuj.primitives.coherent_state.CoherentState`, never stored
+    beside it."""
+
+    temporal_mode_sigma_s: Optional[float] = None
+    """Field-envelope standard deviation in seconds, or ``None``.
+
+    Defined by ``f(t) = (pi*sigma**2)**-0.25 * exp(-(t-t0)**2 / (2*sigma**2))``
+    with ``integral |f|**2 == 1`` -- the **field** envelope's standard deviation,
+    not the intensity envelope's. The signal's tick is ``t0``, the centre of the
+    envelope. Not converted with ``seconds_to_ticks``: that helper rounds to
+    integer picoseconds, and this is a continuous width, not an event time."""
+
     def __post_init__(self):
 
         # Fast-path constructor:
@@ -271,26 +312,89 @@ class Signal:
         if not isinstance(self.origin, str) or not self.origin:
             raise ValueError("origin must be a non-empty string")
 
+        if self.coherent_state is not None and not isinstance(
+            self.coherent_state,
+            CoherentState,
+        ):
+            raise TypeError("coherent_state must be CoherentState or None")
+
+        object.__setattr__(
+            self,
+            "temporal_mode_sigma_s",
+            require_optional_positive_real(
+                self.temporal_mode_sigma_s,
+                field_name="temporal_mode_sigma_s",
+            ),
+        )
+
+    def _derived(self, **replacements: Any) -> "Signal":
+        """Return a copy of this signal with named fields replaced.
+
+        Parameters
+        ----------
+        **replacements
+            Field names to substitute. Any field not named is carried over
+            unchanged. Passing :data:`_KEEP` as a value is equivalent to
+            omitting the name, which lets a caller compute a "replace or keep"
+            value without branching at the call site.
+
+        Returns
+        -------
+        Signal
+            New signal with every field copied and the named ones replaced.
+
+        Raises
+        ------
+        TypeError
+            If a name is not a field of :class:`Signal`.
+
+        Notes
+        -----
+        Construction-time validation is **not** re-run. This is an internal
+        transform for component code that already holds a validated signal.
+
+        Every field is copied, so a field added to ``Signal`` is carried through
+        with no edit here. See ``docs/dev/dps-design.md`` section 3, S3 for why
+        the copy is built this way and what it costs.
+        """
+        unknown = tuple(
+            name for name in replacements if name not in _SIGNAL_FIELD_SETTERS
+        )
+        if unknown:
+            raise TypeError(f"unknown Signal field(s): {', '.join(sorted(unknown))}")
+
+        signal = object.__new__(type(self))
+        for _name, get, set_ in _SIGNAL_ACCESSORS:
+            set_(signal, get(self))
+        for name, value in replacements.items():
+            if value is not _KEEP:
+                _SIGNAL_FIELD_SETTERS[name](signal, value)
+        return signal
+
     def _with_metadata(
         self,
         *,
         meta: Meta,
         timing_meta: Meta,
     ) -> "Signal":
-        """Return an internally annotated signal without revalidating fields."""
-        signal = object.__new__(type(self))
-        object.__setattr__(signal, "id", self.id)
-        object.__setattr__(signal, "signal_kind", self.signal_kind)
-        object.__setattr__(signal, "encoding_scheme", self.encoding_scheme)
-        object.__setattr__(signal, "emission_time", self.emission_time)
-        object.__setattr__(signal, "origin", self.origin)
-        object.__setattr__(signal, "wavelength_nm", self.wavelength_nm)
-        object.__setattr__(signal, "correlation_id", self.correlation_id)
-        object.__setattr__(signal, "correlation_meta", self.correlation_meta)
-        object.__setattr__(signal, "state_ref", self.state_ref)
-        object.__setattr__(signal, "state_targets", self.state_targets)
-        object.__setattr__(signal, "protocol_params", self.protocol_params)
-        object.__setattr__(signal, "meta", meta)
-        object.__setattr__(signal, "timing_meta", timing_meta)
-        object.__setattr__(signal, "validation_flag", self.validation_flag)
-        return signal
+        """Return an internally annotated signal without revalidating fields.
+
+        Thin wrapper over :meth:`_derived`, kept with an unchanged signature so
+        existing transport code does not move.
+        """
+        return self._derived(meta=meta, timing_meta=timing_meta)
+
+
+_SIGNAL_FIELD_NAMES: tuple[str, ...] = tuple(f.name for f in fields(Signal))
+"""Every ``Signal`` field name, in declaration order."""
+
+_SIGNAL_ACCESSORS: tuple[tuple[str, Any, Any], ...] = tuple(
+    (name, getattr(Signal, name).__get__, getattr(Signal, name).__set__)
+    for name in _SIGNAL_FIELD_NAMES
+)
+"""``(name, get, set)`` slot descriptors for every field, in declaration order."""
+
+_SIGNAL_FIELD_SETTERS: dict[str, Any] = {
+    name: set_ for name, _get, set_ in _SIGNAL_ACCESSORS
+}
+"""Setter descriptor per field name, and the unknown-field membership test."""

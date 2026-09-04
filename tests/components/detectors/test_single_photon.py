@@ -610,3 +610,131 @@ def test_single_photon_detector_rejects_mismatched_dark_policy_window() -> None:
         assert "window_duration_ticks" in str(exc)
     else:
         raise AssertionError("expected ValueError")
+
+
+# --------------------------------------------------------------------------
+# signal_click_probability: override, never multiply
+# --------------------------------------------------------------------------
+
+
+def _click_count(
+    *,
+    efficiency: float,
+    signal_click_probability: float | None,
+    trials: int,
+    seed: int = 4242,
+) -> int:
+    """Run `trials` independent windows and count the signal clicks.
+
+    A fresh detector per trial, because dead time and afterpulsing are state and
+    this is a question about one Bernoulli draw. Draws come from a real
+    `Timeline` stream, so what is exercised is the production RNG rather than a
+    scripted one that could be made to say anything.
+    """
+    timeline = Timeline(master_seed=seed)
+    rng = timeline.rng("probe", "single_photon", "det-0", "efficiency")
+    params = SinglePhotonDetectorParams(
+        efficiency=efficiency,
+        dark_count_rate_hz=0.0,
+    )
+
+    clicked = 0
+    for trial in range(trials):
+        detector = SinglePhotonDetector(detector_id="det-0", params=params)
+        clicks = detector.evaluate_window(
+            time=trial,
+            signal_present=True,
+            window_duration_ticks=1,
+            rngs=_streams(efficiency=rng),
+            signal_click_probability=signal_click_probability,
+        )
+        clicked += len(clicks)
+
+    return clicked
+
+
+def test_signal_click_probability_overrides_efficiency_and_never_multiplies() -> None:
+    # The S8 trap, and the only assertion in the suite that catches it.
+    #
+    # `click_probability` returns 1 - exp(-eta_d * mu) with the detector's own
+    # eta_d ALREADY inside the exponent. A `_sample_signal_click` that multiplies
+    # by params.efficiency instead of replacing it applies eta_d twice: at
+    # eta_d = 0.2 a run yields a fifth of the clicks it should, nothing raises,
+    # and every rate is uniformly low -- indistinguishable from a lossier link,
+    # which is the quantity a QKD run is trying to measure.
+    #
+    # efficiency 0.5 with probability 1.0 must click on EVERY trial. Under the
+    # multiply bug it clicks about half the time.
+    trials = 400
+
+    assert (
+        _click_count(
+            efficiency=0.5,
+            signal_click_probability=1.0,
+            trials=trials,
+        )
+        == trials
+    )
+
+    # The converse, so neither value can be the one being read by accident: if
+    # the code read params.efficiency and ignored the argument, this would click
+    # on every trial instead of about half.
+    half = _click_count(
+        efficiency=1.0,
+        signal_click_probability=0.5,
+        trials=trials,
+    )
+    assert 0 < half < trials
+    assert half == pytest.approx(trials * 0.5, rel=0.15)
+
+
+def test_signal_click_probability_zero_beats_a_perfect_efficiency() -> None:
+    # The other direction of the same override, at the branch that short-circuits
+    # before touching the RNG.
+    assert _click_count(efficiency=1.0, signal_click_probability=0.0, trials=50) == 0
+
+
+def test_signal_click_probability_of_none_keeps_params_efficiency() -> None:
+    # Regression guard on the default path: every existing caller passes nothing,
+    # and must keep sampling against params.efficiency exactly as before.
+    assert _click_count(efficiency=1.0, signal_click_probability=None, trials=50) == 50
+    assert _click_count(efficiency=0.0, signal_click_probability=None, trials=50) == 0
+
+    partial = _click_count(efficiency=0.5, signal_click_probability=None, trials=400)
+    assert partial == pytest.approx(400 * 0.5, rel=0.15)
+
+
+def test_a_supplied_probability_consumes_the_stream_like_an_efficiency() -> None:
+    # Draw-count parity is what makes S8 safe to land: the branch structure is
+    # identical either way, so exactly one random() is consumed when
+    # 0 < p < 1 and none at the two endpoints. A supplied probability therefore
+    # cannot shift a stream position that an efficiency would not have shifted.
+    detector = SinglePhotonDetector(
+        detector_id="det-0",
+        params=SinglePhotonDetectorParams(efficiency=0.5, dark_count_rate_hz=0.0),
+    )
+
+    # 0 < p < 1: one draw, and the scripted value is the one compared.
+    rng = ScriptedRNG(random_values=[0.9])
+    detector.evaluate_window(
+        time=0,
+        signal_present=True,
+        window_duration_ticks=1,
+        rngs=_streams(efficiency=rng),
+        signal_click_probability=0.25,
+    )
+    assert rng.random_values == []
+
+    # p == 1.0 and p == 0.0 short-circuit: FakeRNG raises on an unexpected call.
+    for probability in (0.0, 1.0):
+        detector = SinglePhotonDetector(
+            detector_id="det-0",
+            params=SinglePhotonDetectorParams(efficiency=0.5, dark_count_rate_hz=0.0),
+        )
+        detector.evaluate_window(
+            time=0,
+            signal_present=True,
+            window_duration_ticks=1,
+            rngs=_streams(efficiency=FakeRNG()),
+            signal_click_probability=probability,
+        )

@@ -61,6 +61,8 @@ Module Pages
    :titlesonly:
 
    Single Photon Source <sources/single_photon_source>
+   Weak Coherent Pulse Source <sources/weak_coherent_pulse_source>
    Entangled Pair Source <sources/entangled_pair_source>
+   Coherent Preparation Policies <sources/coherent_preparation>
    Source Reports <sources/reports>
    Shared Source Helpers <sources/common>

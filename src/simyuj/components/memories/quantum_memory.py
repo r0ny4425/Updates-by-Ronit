@@ -12,7 +12,7 @@ from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, cast
 
 from simyuj.components.detectors.primitives.readout import run_qubit_readout
-from simyuj.components.quantum_targets import qstate_targets_from_signal
+from simyuj.components.quantum_targets import qubit_carrier_targets_from_signal
 from simyuj.engine.component import Component
 from simyuj.engine.event import Event
 from simyuj.engine.timeline import Timeline
@@ -1529,7 +1529,7 @@ class QuantumMemory(Component):
         return record.status is MemoryPositionStatus.EMPTY and time >= record.ready_at
 
     def _single_photon_subsystem(self, signal: Signal):
-        targets = qstate_targets_from_signal(signal)
+        targets = qubit_carrier_targets_from_signal(signal)
         if len(targets) != 1:
             raise ValueError("memory absorb requires exactly one qstate target")
         return targets[0]

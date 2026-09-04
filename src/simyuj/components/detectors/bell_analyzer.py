@@ -27,7 +27,7 @@ from simyuj.tracing.levels import LogLevel
 
 from ..connections import PortConnection, PortDelivery
 from ..ports import Port, PortDirection, PortKind
-from ..quantum_targets import qstate_targets_from_signal
+from ..quantum_targets import qubit_carrier_targets_from_signal
 from .primitives.actions import ACTION_COINCIDENCE_TIMEOUT, ACTION_RUN_BELL_ANALYSIS
 from .primitives.click import ClickPattern, resolve_click_pattern
 from .primitives.gate import AlwaysOpenGate, GateModel
@@ -708,7 +708,7 @@ class BellStateAnalyzer(Component):
         timeline: Timeline,
     ) -> None:
         side = self._side_from_delivery(delivery)
-        targets = qstate_targets_from_signal(signal)
+        targets = qubit_carrier_targets_from_signal(signal)
 
         buffered = BufferedBellInput(
             buffer_id=self._make_buffer_id(

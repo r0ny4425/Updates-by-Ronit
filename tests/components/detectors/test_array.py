@@ -30,6 +30,7 @@ from simyuj.components.ports import Port, PortDirection, PortKind
 from simyuj.engine.component import Component
 from simyuj.engine.event import Event
 from simyuj.engine.timeline import Timeline
+from simyuj.primitives.coherent_state import CoherentState
 from simyuj.primitives.subsystems import SubsystemHandle
 from simyuj.qstate import SubsystemId
 from simyuj.signal import EncodingScheme, Signal, SignalKind
@@ -211,6 +212,39 @@ def _signal_with_qstate(
     )
 
     return signal, subsystem
+
+
+def _polarized_pulse_signal(timeline: Timeline) -> Signal:
+    """A polarized coherent pulse, exactly as WeakCoherentPulseSource builds one.
+
+    ``state_ref`` and ``coherent_state`` both set, and the handle stamped
+    ``kind="mode"`` -- the shape that passes a bare ``state_ref`` presence check.
+    """
+    subsystem_label = "wcp:mode:1"
+    state_ref = timeline.qstate.prepare(
+        (1 + 0j, 0j),
+        rep="ket",
+        subsystems=(SubsystemId(subsystem_label),),
+    )
+
+    return Signal(
+        id="pulse-0",
+        signal_kind=SignalKind.PULSE,
+        encoding_scheme=EncodingScheme.POLARIZATION,
+        emission_time=timeline.current_time,
+        origin="wcp",
+        state_ref=state_ref,
+        state_targets=(
+            SubsystemHandle(
+                label=subsystem_label,
+                kind="mode",
+                index=0,
+                metadata=(("qstate_subsystem", subsystem_label),),
+            ),
+        ),
+        coherent_state=CoherentState.from_mean_photon_number(0.1),
+        temporal_mode_sigma_s=1e-11,
+    )
 
 
 def _plain_signal() -> Signal:
@@ -565,6 +599,35 @@ def test_detector_array_rejects_delivery_to_wrong_port() -> None:
 
     with pytest.raises(ValueError, match="target_port must be this array"):
         array.handle_event(event, timeline)
+
+
+def test_detector_array_rejects_mode_role_signal() -> None:
+    """A polarized coherent pulse must not be measured as a qubit carrier.
+
+    It carries a ``state_ref``, so a presence check alone lets it through to a
+    measurement that routes the whole pulse to one detector -- no double clicks
+    at any mean photon number, and a click rate that ignores mu entirely.
+    """
+    timeline = Timeline()
+    array = DetectorArray(
+        device_id="bob_rx",
+        detectors=_detectors(),
+        readout=_readout(),
+    )
+    array.bind(binding_context(timeline))
+
+    signal = _polarized_pulse_signal(timeline)
+
+    event = _event(
+        array=array,
+        payload_ref=_delivery(array=array, payload=signal),
+    )
+
+    with pytest.raises(ValueError, match="kind='mode'") as excinfo:
+        array.handle_event(event, timeline)
+
+    assert "not implemented yet" in str(excinfo.value)
+    assert not array.reports
 
 
 def test_detector_array_rejects_non_signal_delivery_payload() -> None:

@@ -3,29 +3,15 @@
 This module serves signal-level component code. It is not a general qstate
 layout resolver for memories or multi-qubit layouts.
 
-Two questions, not one
-----------------------
-
 A signal may carry a qstate record, and that record may or may not be the thing
 that propagates. :func:`qstate_targets_from_signal` answers *which subsystem*;
-:func:`qstate_payload_role` answers *what the subsystem is for*. Transport code
-needs both, because only the second decides whether channel loss may destroy the
-record.
+:func:`qstate_payload_role` answers *what the subsystem is for*;
+:func:`qubit_carrier_targets_from_signal` asks both and requires the record to be
+the carrier.
 
-For a photon signal the record is the carrier, so the two questions have the
-same answer and ``role == "qubit"`` is equivalent to ``state_ref is not None``.
-They diverge for a polarized coherent pulse, whose record describes the mode its
-amplitude occupies rather than the thing that propagates. That signal ships:
-``WeakCoherentPulseSource`` builds one whenever a polarization selector is
-configured, which is why the role exists.
-
-:func:`qubit_carrier_targets_from_signal` asks both at once, for the components
-that only work when the answers agree. A qstate-measuring component -- a
-detector array, a Bell analyzer, a memory -- measures, collapses, or stores the
-record it is handed, which is correct only when that record *is* the carrier.
-Handed a mode record it would silently treat a whole coherent pulse as one
-photon, so those callers resolve targets through the requiring form rather than
-the role-agnostic one.
+For a photon signal the record is the carrier and the two questions have the same
+answer. They diverge for a polarized coherent pulse, whose record describes the
+mode its amplitude occupies rather than the thing that propagates.
 """
 
 from __future__ import annotations
@@ -41,11 +27,7 @@ QstatePayloadRole = Literal["qubit", "mode"]
 
 
 def _single_state_handle(signal: Signal) -> SubsystemHandle:
-    """Return the one ``SubsystemHandle`` a qstate-backed signal must carry.
-
-    Shared by :func:`qstate_targets_from_signal` and
-    :func:`qstate_payload_role` so the arity rule and its message exist once.
-    """
+    """Return the one ``SubsystemHandle`` a qstate-backed signal must carry."""
     if signal.state_ref is None:
         raise ValueError("quantum signal must carry state_ref")
 
@@ -75,13 +57,12 @@ def qstate_payload_role(signal: Signal) -> Optional[QstatePayloadRole]:
     -------
     {"qubit", "mode"} or None
         ``"qubit"``
-            The record **is** the propagating carrier. Channel loss destroys
-            it; channel noise acts on it. Every signal in the simulator today.
+            The record **is** the propagating carrier. Loss destroys it, noise
+            acts on it.
         ``"mode"``
-            The record **describes** the mode a classical amplitude occupies --
-            a polarization state beside a ``coherent_state``, for example. Loss
-            scales the amplitude and leaves the record alone; noise still acts
-            on it.
+            The record **describes** the mode a classical amplitude occupies, as
+            a polarization state beside a ``coherent_state`` does. Loss scales
+            the amplitude and leaves the record alone; noise still acts on it.
         ``None``
             No qstate record at all. A bare coherent pulse.
 
@@ -94,25 +75,14 @@ def qstate_payload_role(signal: Signal) -> Optional[QstatePayloadRole]:
 
     Notes
     -----
-    **Presence and role are different questions, and conflating them is a bug
-    waiting to happen.** ``state_ref is not None`` says a record exists;
-    only the role says whether loss may destroy it. Gating a Bernoulli survival
-    trial on presence would subject a polarization state to probabilistic
-    annihilation instead of scaling an amplitude -- which produces plausible
-    numbers, because it looks exactly like an ordinary lossy link. Use
-    ``role is not None`` to gate noise, which applies to either role, and
-    ``role == "qubit"`` to gate loss, which does not.
+    Gate noise on ``role is not None``, which applies to either role, and loss on
+    ``role == "qubit"``, which does not. Gating loss on ``state_ref is not None``
+    instead would subject a polarization state to probabilistic annihilation
+    rather than scaling an amplitude, and the result looks exactly like an
+    ordinary lossy link.
 
-    **The one-handle rule is load-bearing, not incidental.** The role is read
-    from the single handle in ``state_targets``, so a signal carrying both a
-    carrier qubit *and* a mode descriptor would need two handles and would have
-    no single role. Nothing constructs such a signal and nothing is planned to;
-    if one is ever needed, this function is the thing that has to change, not
-    its callers.
-
-    ``SubsystemHandle.kind`` defaults to ``"qubit"``, so a handle built without
-    an explicit role is a carrier. That direction is deliberate: forgetting to
-    stamp a role gives today's behaviour, never a silently unprotected record.
+    ``SubsystemHandle.kind`` defaults to ``"qubit"``, so an unstamped handle is a
+    carrier.
 
     Examples
     --------
@@ -138,13 +108,9 @@ def qstate_payload_role(signal: Signal) -> Optional[QstatePayloadRole]:
 def qstate_targets_from_signal(signal: Signal) -> tuple[SubsystemId, ...]:
     """Return qstate subsystem targets encoded in a signal.
 
-    This shared adapter is used by qstate-backed components that consume
-    ``Signal.state_targets``. Current simulator behavior supports exactly one
-    target per signal; multi-target and multi-qubit signal handling is future
-    work.
-
-    When present, ``SubsystemHandle.metadata`` key ``"qstate_subsystem"``
-    takes precedence over the handle label.
+    Exactly one target per signal is supported; multi-target handling is future
+    work. ``SubsystemHandle.metadata`` key ``"qstate_subsystem"`` takes
+    precedence over the handle label when present.
 
     Parameters
     ----------
@@ -167,15 +133,13 @@ def qstate_targets_from_signal(signal: Signal) -> tuple[SubsystemId, ...]:
 
     Notes
     -----
-    This helper resolves identity only. It does not check whether the returned
-    subsystem currently exists in a qstate manager and does not mutate qstate.
+    Resolves identity only: it does not check whether the subsystem exists in a
+    qstate manager and does not mutate qstate.
 
-    It is **role-agnostic** on purpose: a mode record needs its subsystem
-    resolved just as a carrier does, so that noise can be applied to it. Callers
-    that need to know whether loss may destroy the record ask
-    :func:`qstate_payload_role` separately.
+    Role-agnostic -- a mode record needs its subsystem resolved just as a carrier
+    does, so that noise can be applied to it. Callers that need to know whether
+    loss may destroy the record ask :func:`qstate_payload_role` separately.
 
-    The one-target restriction matches current signal-level component behavior.
     Memory and layout code should use their own qstate interfaces rather than
     this adapter.
     """
@@ -202,8 +166,7 @@ def qubit_carrier_targets_from_signal(signal: Signal) -> tuple[SubsystemId, ...]
     Returns
     -------
     tuple[SubsystemId, ...]
-        Single resolved qstate subsystem target, exactly as
-        :func:`qstate_targets_from_signal` returns it.
+        Single resolved qstate subsystem target.
 
     Raises
     ------
@@ -215,18 +178,14 @@ def qubit_carrier_targets_from_signal(signal: Signal) -> tuple[SubsystemId, ...]
 
     Notes
     -----
-    **Presence is not enough, which is the whole reason this exists.** A bare
-    coherent pulse has no ``state_ref`` and is already refused by the underlying
-    resolver. A *polarized* coherent pulse has one, so it passes that check and
-    reaches a measurement that would treat the polarization record as the thing
-    that propagates -- routing an entire pulse to one detector, making the
-    double-click rate identically zero at every mean photon number and the click
-    rate independent of it. The run completes and the numbers look reasonable,
-    which is what makes the loud failure here worth the line.
+    Presence is not enough. A bare coherent pulse has no ``state_ref`` and is
+    already refused by the underlying resolver. A *polarized* coherent pulse has
+    one, so it passes that check and would reach a measurement treating the
+    polarization record as the thing that propagates -- routing an entire pulse
+    to one detector, and completing with plausible numbers.
 
-    Use :func:`qstate_targets_from_signal` directly where the role genuinely
-    does not matter: a channel resolves a mode record's subsystem so that noise
-    can act on it, and must keep doing so.
+    Use :func:`qstate_targets_from_signal` directly where the role does not
+    matter, as a channel does when applying noise to a mode record.
     """
     role = qstate_payload_role(signal)
 

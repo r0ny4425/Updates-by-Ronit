@@ -30,13 +30,9 @@ class _Keep:
 
 
 _KEEP = _Keep()
-"""Explicit "no change" marker accepted by :meth:`Signal._derived`.
+"""Passed to :meth:`Signal._derived` to leave a field unchanged.
 
-Omitting a field name from the call already means "keep it", so this sentinel is
-only needed by a caller that computes a value which may or may not be a
-replacement. It exists because ``None`` is a legal value for
-``coherent_state``: clearing an optical amplitude and preserving one must stay
-distinguishable, and a bare ``None`` cannot express both.
+Distinct from ``None``, which is a legal field value and clears one.
 """
 
 
@@ -207,11 +203,8 @@ class Signal:
     validation_flag: bool = True
     "Whether to run construction-time validation."
 
-    # The two optical fields below are appended at the end of the field list
-    # rather than grouped next to ``wavelength_nm``, where they belong
-    # conceptually. Appending makes "is any call site constructing Signal
-    # positionally?" unanswerable rather than answered once -- including for a
-    # call site added later. Do not tidy them into place.
+    # Appended last, not grouped with wavelength_nm. Do not tidy them into
+    # place; see docs/dev/dps-design.md section 2.
 
     coherent_state: Optional[CoherentState] = None
     """Optical amplitude carried by this signal, or ``None``.
@@ -228,36 +221,10 @@ class Signal:
     """Field-envelope standard deviation in seconds, or ``None``.
 
     Defined by ``f(t) = (pi*sigma**2)**-0.25 * exp(-(t-t0)**2 / (2*sigma**2))``
-    with ``integral |f|**2 == 1``, so this is the **field** envelope's standard
-    deviation and not the intensity envelope's.
-
-    **``t0`` is the signal's own tick, and the envelope is symmetric about it.**
-    That is a contract of this class, not a convention of any one component: a
-    signal's tick *is* the centre of its temporal mode. At a source that tick is
-    ``emission_time``; in flight it is the tick of the delivery event carrying
-    the signal, which the channel also records as ``channel_arrival_time`` in
-    ``timing_meta``. Every component that measures a tick against an envelope
-    depends on this. In particular a separation between two signals' envelope
-    centres is a plain difference of their delivery ticks, which is what
-    ``components.coherent_optics.gaussian_temporal_overlap`` takes as
-    ``delta_s`` -- under a leading-edge reading that separation would be wrong
-    whenever the two widths differ.
-
-    A tick is therefore a *centre*, never an onset. The one place that might
-    read otherwise is ``active_detection_duration_at_arrival`` in
-    ``components/detectors/primitives/window.py``, which measures a detector's
-    exposure forward from an arrival tick. **That is a different quantity and
-    does not conflict**: it describes when a *device* is open, a hardware gate
-    with its own start and end, not the shape of the light. A pulse remains
-    centred on its tick while the detector observing it counts forward from the
-    same tick.
-
-    A property of the occupied mode rather than of the state occupying it, which
-    is why it sits beside ``wavelength_nm`` rather than inside
-    ``coherent_state``. It is **not** converted with ``seconds_to_ticks``: that
-    helper rounds to integer picoseconds, which would quantize any overlap
-    computed from it. The seconds-to-ticks rule governs event times, which must
-    be integers; a continuous width does not."""
+    with ``integral |f|**2 == 1`` -- the **field** envelope's standard deviation,
+    not the intensity envelope's. The signal's tick is ``t0``, the centre of the
+    envelope. Not converted with ``seconds_to_ticks``: that helper rounds to
+    integer picoseconds, and this is a continuous width, not an event time."""
 
     def __post_init__(self):
 
@@ -386,26 +353,9 @@ class Signal:
         Construction-time validation is **not** re-run. This is an internal
         transform for component code that already holds a validated signal.
 
-        The field list is read from ``dataclasses.fields(Signal)`` once, at
-        import, rather than written out by hand. That is the whole point of the
-        method: ``Signal`` is ``slots=True``, so a field that a hand-written
-        copy forgot to set is left *unset*, and the first read of it raises
-        ``AttributeError`` on the far side of a channel, far from the edit that
-        caused it. Deriving the names makes that failure impossible rather than
-        merely unlikely. ``test_derived_covers_every_field`` asserts the list
-        still matches the dataclass.
-
-        Building a fresh ``Signal(...)`` at the call site instead would be
-        strictly worse: a newly added field would silently take its declared
-        default at every construction site, with nothing raising at all.
-
-        The copy runs in two phases -- copy every field, then overwrite the named
-        replacements -- rather than deciding per field whether it is being
-        replaced. Both phases use the precomputed slot descriptors in
-        :data:`_SIGNAL_ACCESSORS` and :data:`_SIGNAL_FIELD_SETTERS`, which avoids
-        a dict lookup and an attribute lookup per field. This sits on the copy
-        path of every signal in the simulator; see ``docs/dev/dps-design.md``
-        section 3, S3 for the measurements.
+        Every field is copied, so a field added to ``Signal`` is carried through
+        with no edit here. See ``docs/dev/dps-design.md`` section 3, S3 for why
+        the copy is built this way and what it costs.
         """
         unknown = tuple(
             name for name in replacements if name not in _SIGNAL_FIELD_SETTERS
@@ -436,33 +386,15 @@ class Signal:
 
 
 _SIGNAL_FIELD_NAMES: tuple[str, ...] = tuple(f.name for f in fields(Signal))
-"""Every ``Signal`` field name, in declaration order.
-
-Derived from the dataclass rather than written out, so a field added later is
-carried through :meth:`Signal._derived` with no edit here. Guarded by a test.
-"""
+"""Every ``Signal`` field name, in declaration order."""
 
 _SIGNAL_ACCESSORS: tuple[tuple[str, Any, Any], ...] = tuple(
     (name, getattr(Signal, name).__get__, getattr(Signal, name).__set__)
     for name in _SIGNAL_FIELD_NAMES
 )
-"""``(name, get, set)`` slot descriptors for every field, in declaration order.
-
-``Signal`` is ``slots=True``, so each field is a ``member_descriptor`` on the
-class. Binding ``__get__``/``__set__`` once at import removes a name lookup and a
-``dict`` lookup from every field of every copy, and the descriptors write through
-the frozen dataclass exactly as ``object.__setattr__`` does.
-
-Built from :data:`_SIGNAL_FIELD_NAMES`, so the existing test asserting that names
-tuple still matches ``dataclasses.fields(Signal)`` guards this table too -- there
-is no second list to keep in sync.
-"""
+"""``(name, get, set)`` slot descriptors for every field, in declaration order."""
 
 _SIGNAL_FIELD_SETTERS: dict[str, Any] = {
     name: set_ for name, _get, set_ in _SIGNAL_ACCESSORS
 }
-"""Setter descriptor per field name, for the replacement phase of ``_derived``.
-
-Also the membership test for the unknown-field check, which is why that check is
-a ``dict`` lookup rather than a scan of :data:`_SIGNAL_FIELD_NAMES`.
-"""
+"""Setter descriptor per field name, and the unknown-field membership test."""
